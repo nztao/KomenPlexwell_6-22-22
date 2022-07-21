@@ -1,0 +1,1805 @@
+---
+title: "Bulk RNA-Seq: Data Pre-processing for June 22 Plexwell"
+author:
+- name: Neil Zhao
+  affiliation: &id Department of Environmental Health Sciences, School of Public Health, University of Michigan-Ann Arbor, 1415 Washington Heights, Ann Arbor, MI, 48109-2029, USA
+- name: Anagha Tapaswi
+  affiliation: *id
+- name: Justin Colacino
+  affiliation: *id
+package: BiocStyle
+output:
+  BiocStyle::html_document:
+    code_download: TRUE
+    code_folding: show
+    theme: cerulean  
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+abstract: |
+  In this brief workflow, we start with aligned _featureCounts_ mapped at the gene-level and perform data pre-processing and exploratory analyses. Base **_R_** and the **_edgeR_** package are used to import, filter, and organize the raw counts data. We then finish off with data reduction visualizations and quality control checks. By doing  so, this allows for ease in performing downstream differential expression analysis and gene set testing. 
+  
+  This pipeline is inspired by _[Law et al. 2018](https://bioconductor.org/packages/release/workflows/vignettes/RNAseq123/inst/doc/limmaWorkflow.html)_ and Justin Colacino's '_Komen plexwell processing.R_' script (unpublished).
+  
+vignette: |
+  %\VignetteIndexEntry{Bulk RNA-Seq: Data Pre-processing for June 22 Plexwell}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+bibliography: references.bib
+link-citations: true
+nocite: '@*'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,
+                      results = "show")
+```
+
+```{r biostyle template, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+#If you want to create your own Bioconductor-themed vignette template 
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("BiocStyle", "bookdown", "pander", "rmarkdown", "tufte", "gifski", "bibtex", "RefManageR", "gganimate", "transformr", "RColorBrewer", "viridis"))
+
+#As of July 20, 2022, some JS scripts are broken with BIocStyle
+#Use developer fork version of BiocStyle until patched 
+BiocManager::install('grimbough/BiocStyle', ref = 'glimma-plots')
+
+```
+
+```{r misc formatting, include=FALSE}
+#Need to load this in for rmarkdown formatting tools
+library(BiocStyle)
+library(bookdown)
+library(gifski)
+library(pander)
+library(rmarkdown)
+library(tufte)
+#For citations
+library(bibtex)
+library(RefManageR)
+#Optional: Animation/Color scheme packages
+library(gganimate)
+library(transformr)
+library(RColorBrewer)
+library(viridis)
+```
+
+```{r eval=FALSE, include=FALSE}
+#For some reason, sidenotes do not work automatically with tufte package (at least for me).
+#One solution is to create custom CSS sidenote margins as shown in this post (see next 2 code chunks below): 
+# Ref: https://community.rstudio.com/t/writing-a-side-note-on-r-markdown-html-2/69065/2
+```
+
+```{css sidenote, echo = FALSE}
+.sidenote, .marginnote { 
+  float: right;
+  clear: right;
+  margin-right: -80%;
+  width: 50%;         # best between 50% and 60%
+  margin-top: 0;
+  margin-bottom: 0;
+  font-size: 1.1rem;
+  line-height: 1.3;
+  vertical-align: baseline;
+  position: relative;
+  }
+```
+
+```{r maxheight, include=FALSE}
+options(width = 60)
+local({
+  hook_output <- knitr::knit_hooks$get('output')
+  knitr::knit_hooks$set(output = function(x, options) {
+    if (!is.null(options$max.height)) options$attr.output <- c(
+      options$attr.output,
+      sprintf('style="max-height: %s;"', options$max.height)
+    )
+    hook_output(x, options)
+  })
+})
+```
+
+```{r eval=FALSE, include=FALSE}
+#The next two code chunks below allow you to click and zoom into image outputs
+#Reference: https://stackoverflow.com/questions/56361986/zoom-function-in-rmarkdown-html-plot
+```
+
+```{css zoom-lib-src, echo = FALSE}
+script src = "https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"
+```
+
+```{js zoom-jquery, echo = FALSE}
+ $(document).ready(function() {
+    $('body').prepend('<div class=\"zoomDiv\"><img src=\"\" class=\"zoomImg\"></div>');
+    // onClick function for all plots (img's)
+    $('img:not(.zoomImg)').click(function() {
+      $('.zoomImg').attr('src', $(this).attr('src')).css({width: '100%'});
+      $('.zoomDiv').css({opacity: '1', width: 'auto', border: '1px solid white', borderRadius: '5px', position: 'fixed', top: '50%', left: '50%', marginRight: '-50%', transform: 'translate(-50%, -50%)', boxShadow: '0px 0px 50px #888888', zIndex: '50', overflow: 'auto', maxHeight: '100%'});
+    });
+    // onClick function for zoomImg
+    $('img.zoomImg').click(function() {
+      $('.zoomDiv').css({opacity: '0', width: '0%'}); 
+    });
+  });
+```
+
+# Getting started
+
+## Data files and repositories {#data-files-and-repositories .unnumbered}
+
+The raw counts and sample metadata data files are available from:
+
+<https://drive.google.com/drive/folders/1G2xSZfloEjk_cMuFKbglx8UmO7hVylcE>
+
+`r   margin_note("_Tip: Set your working directory by entering Ctrl + Shift + H_")` You should download the files listed below and place them into a folder in your working directory.
+
+    Komen_Jun22_seqwell_counts.txt
+    Seq_well_re_runs_June2022.xlsx
+
+## Bioconductor/R Packages {.unnumbered}
+
+Packages used:
+
+-   edgeR
+-   AnnotationDbi
+-   org.Hs.eg.db (Use for human gene annotations)
+-   org.Mm.eg.db (Use for mouse gene annotations)
+-   Biostrings
+-   tidyverse
+-   reshape2
+-   gplots
+-   glimma
+
+To install the packages, you can:
+
+-   Install the latest releases individually through ***R***. This version of the tutorial uses `R version 4.2.0`.
+-   Get the latest version of Bioconductor and packages by starting ***R*** and entering these commands:
+
+```{r Install Packages, echo = TRUE, eval=FALSE, results = 'hide'}
+if (!requireNamespace("BiocManager"))
+    install.packages("BiocManager")
+BiocManager::install(c("edgeR", "AnnotationDbi", 
+                       "org.Hs.eg.db", "org.Mm.eg.db", "Biostrings", "tidyverse", "gplots", "Glimma"))
+```
+
+<br>
+
+First, let's load all the packages we will use to process and analyze the data.
+
+```{r load libraries, echo=FALSE, message=FALSE, warning=FALSE}
+library(edgeR)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(org.Mm.eg.db)
+library(Biostrings)
+library(tidyverse)
+library(reshape2)
+library(gplots)
+library(Glimma)
+```
+
+# Data packaging
+
+The data for this pipeline comes from the June 22 Plexwell RNA-seqwell experiment. It includes the processed data (counts) for the [5-3-22 Komen experiment re-runs](https://drive.google.com/drive/folders/17I818qtjd8s5ROE4Umq-0YUCdVEkg6i8) and extra experimental sample wells for Rachel Morgan, Katelyn Polemi, Linda Samuelson.
+
+For reference, we re-processed the following samples for the Komen Plexwell Experiment on 5-3-2022:
+
+<button class="btn btn-primary btn-xs p-0" data-toggle="collapse" data-target="#samplererun">
+
+Show/Hide
+
+</button>
+
+::: {#samplererun .collapse}
+| Pool Name | Sample  | sample.id         | Treatment        | Description        | Dose | lib.size |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| KCR 7518  | KCR7518 | CCATACTC.AGTTTCCT | BPA              | Bisphenol A_1      | 0.1  | 4438319  |
+| KCR 7518  | KCR7518 | TCCTTGGC.AGTTTCCT | BPA              | Bisphenol A_2      | 0.1  | 4592853  |
+| KCR 7518  | KCR7518 | TCACTCAC.AGTTTCCT | BPA              | Bisphenol A_3      | 0.1  | 4830331  |
+| KCR 7518  | KCR7518 | CAGGCTTC.AGTTTCCT | BPA              | Bisphenol A_4      | 1    | 4988069  |
+| KCR 7518  | KCR7518 | CCTACACA.AGTTTCCT | BPA              | Bisphenol A_5      | 1    | 3906282  |
+| KCR 7518  | KCR7518 | ATGGAACA.AGTTTCCT | BPS              | Bisphenol S_8      | 10   | 3986349  |
+| KCR 7889  | KCR7889 | CCATACTC.CCTCCATA | BPA              | Bisphenol A_1      | 0.1  | 330286   |
+| KCR 7889  | KCR7889 | TCCTTGGC.CCTCCATA | BPA              | Bisphenol A_2      | 0.1  | 700937   |
+| KCR 7889  | KCR7889 | TCACTCAC.CCTCCATA | BPA              | Bisphenol A_3      | 0.1  | 664177   |
+| KCR 7889  | KCR7889 | CAGGCTTC.CCTCCATA | BPA              | Bisphenol A_4      | 1    | 602852   |
+| KCR 7889  | KCR7889 | CCTACACA.CCTCCATA | BPA              | Bisphenol A_5      | 1    | 590262   |
+| KCR 7889  | KCR7889 | CGCGTGAT.CCTCCATA | BPA              | Bisphenol A_6      | 1    | 223327   |
+| KCR 7889  | KCR7889 | CATCTTCT.CCTCCATA | BPA              | Bisphenol A_7      | 10   | 113064   |
+| KCR 7889  | KCR7889 | ACATCCTT.CCTCCATA | BPA              | Bisphenol A_8      | 10   | 145697   |
+| KCR 7889  | KCR7889 | ACACAACA.CCTCCATA | BPA              | Bisphenol A_9      | 10   | 463697   |
+| KCR 7889  | KCR7889 | TTGGCTGC.CCTCCATA | BPS              | Bisphenol S_1      | 0.1  | 4643601  |
+| KCR 7889  | KCR7889 | ATGACACC.CCTCCATA | BPS              | Bisphenol S_3      | 0.1  | 3850642  |
+| KCR 7889  | KCR7889 | TGTTGCAC.CCTCCATA | BPS              | Bisphenol S_4      | 1    | 1067957  |
+| KCR 7889  | KCR7889 | ATTCTCCA.CCTCCATA | BPS              | Bisphenol S_5      | 1    | 2892147  |
+| KCR 7889  | KCR7889 | CGCAACAG.CCTCCATA | BPS              | Bisphenol S_6      | 1    | 1833794  |
+| KCR 7889  | KCR7889 | CTTCTGGC.CCTCCATA | BPS              | Bisphenol S_7      | 10   | 522111   |
+| KCR 7889  | KCR7889 | ATGGAACA.CCTCCATA | BPS              | Bisphenol S_8      | 10   | 571686   |
+| KCR 7889  | KCR7889 | CTAACAAC.CCTCCATA | BPS              | Bisphenol S_9      | 10   | 1475635  |
+| KCR 7889  | KCR7889 | CAGGCCAT.CCTCCATA | PFNA             | PFNA_1             | 0.1  | 337540   |
+| KCR 7889  | KCR7889 | CAACTCCG.CCTCCATA | PFNA             | PFNA_2             | 0.1  | 518427   |
+| KCR 7889  | KCR7889 | ACCGACCA.CCTCCATA | PFNA             | PFNA_3             | 0.1  | 81384    |
+| KCR 7889  | KCR7889 | GTGCGAGT.CCTCCATA | PFNA             | PFNA_4             | 1    | 489221   |
+| KCR 7889  | KCR7889 | ATGCCGCT.CCTCCATA | PFNA             | PFNA_5             | 1    | 519967   |
+| KCR 7889  | KCR7889 | TCCTCAGA.CCTCCATA | PFNA             | PFNA_6             | 1    | 126051   |
+| KCR 7889  | KCR7889 | ACGCTGCA.CCTCCATA | PFNA             | PFNA_7             | 10   | 101283   |
+| KCR 7889  | KCR7889 | CGATGGCA.CCTCCATA | PFNA             | PFNA_8             | 10   | 98809    |
+| KCR 7889  | KCR7889 | CAACCGTG.CCTCCATA | PFNA             | PFNA_9             | 10   | 281834   |
+| KCR 7953  | KCR7953 | CGCTCTTG.TATTTGAG | DMSO             | Control 71         | 0    | 4005522  |
+| KCR 7953  | KCR7953 | TGAACTCT.TATTTGAG | DMSO             | Control 72         | 0    | 556342   |
+| KCR 7953  | KCR7953 | ACTCACCG.TATTTGAG | Water            | Control 61         | 0    | 2935786  |
+| KCR 7953  | KCR7953 | CCTTATGT.TATTTGAG | Water            | Control 62         | 0    | 889909   |
+| KCR 7953  | KCR7953 | CCATACTC.TATTTGAG | BPA              | Bisphenol A_1      | 0.1  | 4322     |
+| KCR 7953  | KCR7953 | TCCTTGGC.TATTTGAG | BPA              | Bisphenol A_2      | 0.1  | 2670     |
+| KCR 7953  | KCR7953 | TCACTCAC.TATTTGAG | BPA              | Bisphenol A_3      | 0.1  | 34642    |
+| KCR 7953  | KCR7953 | CAGGCTTC.TATTTGAG | BPA              | Bisphenol A_4      | 1    | 2731     |
+| KCR 7953  | KCR7953 | CCTACACA.TATTTGAG | BPA              | Bisphenol A_5      | 1    | 37554    |
+| KCR 7953  | KCR7953 | CGCGTGAT.TATTTGAG | BPA              | Bisphenol A_6      | 1    | 30332    |
+| KCR 7953  | KCR7953 | CATCTTCT.TATTTGAG | BPA              | Bisphenol A_7      | 10   | 4479     |
+| KCR 7953  | KCR7953 | ACATCCTT.TATTTGAG | BPA              | Bisphenol A_8      | 10   | 1764     |
+| KCR 7953  | KCR7953 | ACACAACA.TATTTGAG | BPA              | Bisphenol A_9      | 10   | 98017    |
+| KCR 7953  | KCR7953 | TTGGCTGC.TATTTGAG | BPS              | Bisphenol S_1      | 0.1  | 328345   |
+| KCR 7953  | KCR7953 | GATGAGAA.TATTTGAG | BPS              | Bisphenol S_2      | 0.1  | 165583   |
+| KCR 7953  | KCR7953 | ATGACACC.TATTTGAG | BPS              | Bisphenol S_3      | 0.1  | 119687   |
+| KCR 7953  | KCR7953 | TGTTGCAC.TATTTGAG | BPS              | Bisphenol S_4      | 1    | 14059    |
+| KCR 7953  | KCR7953 | ATTCTCCA.TATTTGAG | BPS              | Bisphenol S_5      | 1    | 312456   |
+| KCR 7953  | KCR7953 | CGCAACAG.TATTTGAG | BPS              | Bisphenol S_6      | 1    | 35607    |
+| KCR 7953  | KCR7953 | CTTCTGGC.TATTTGAG | BPS              | Bisphenol S_7      | 10   | 15369    |
+| KCR 7953  | KCR7953 | ATGGAACA.TATTTGAG | BPS              | Bisphenol S_8      | 10   | 2159     |
+| KCR 7953  | KCR7953 | CTAACAAC.TATTTGAG | BPS              | Bisphenol S_9      | 10   | 57722    |
+| KCR 7953  | KCR7953 | TGGTGGAA.TATTTGAG | Cadmium_Chloride | Cadmium_Chloride_1 | 0.1  | 4142100  |
+| KCR 7953  | KCR7953 | CTGTACGC.TATTTGAG | Cadmium_Chloride | Cadmium_Chloride_2 | 0.1  | 2517570  |
+| KCR 7953  | KCR7953 | ACTCGAAT.TATTTGAG | Cadmium_Chloride | Cadmium_Chloride_7 | 10   | 854141   |
+| KCR 7953  | KCR7953 | ACGAAGCG.TATTTGAG | DDE              | DDE_1              | 0.1  | 1569364  |
+| KCR 7953  | KCR7953 | CTCTCAGG.TATTTGAG | DDE              | DDE_2              | 0.1  | 310580   |
+| KCR 7953  | KCR7953 | CACCGCAA.TATTTGAG | DDE              | DDE_3              | 0.1  | 1159972  |
+| KCR 7953  | KCR7953 | TGCTCCGT.TATTTGAG | DDE              | DDE_4              | 1    | 401552   |
+| KCR 7953  | KCR7953 | CGAGCATT.TATTTGAG | DDE              | DDE_5              | 1    | 70195    |
+| KCR 7953  | KCR7953 | ACCGTTCC.TATTTGAG | DDE              | DDE_6              | 1    | 1311310  |
+| KCR 7953  | KCR7953 | TCAAGGAT.TATTTGAG | DDE              | DDE_7              | 10   | 615546   |
+| KCR 7953  | KCR7953 | CAAGTGAC.TATTTGAG | DDE              | DDE_8              | 10   | 444754   |
+| KCR 7953  | KCR7953 | CAGAGTGG.TATTTGAG | DDE              | DDE_9              | 10   | 72186    |
+| KCR 7953  | KCR7953 | CAGGCCAT.TATTTGAG | PFNA             | PFNA_1             | 0.1  | 6665     |
+| KCR 7953  | KCR7953 | CAACTCCG.TATTTGAG | PFNA             | PFNA_2             | 0.1  | 3072     |
+| KCR 7953  | KCR7953 | ACCGACCA.TATTTGAG | PFNA             | PFNA_3             | 0.1  | 61567    |
+| KCR 7953  | KCR7953 | GTGCGAGT.TATTTGAG | PFNA             | PFNA_4             | 1    | 32518    |
+| KCR 7953  | KCR7953 | ATGCCGCT.TATTTGAG | PFNA             | PFNA_5             | 1    | 52864    |
+| KCR 7953  | KCR7953 | TCCTCAGA.TATTTGAG | PFNA             | PFNA_6             | 1    | 13358    |
+| KCR 7953  | KCR7953 | ACGCTGCA.TATTTGAG | PFNA             | PFNA_7             | 10   | 25890    |
+| KCR 7953  | KCR7953 | CGATGGCA.TATTTGAG | PFNA             | PFNA_8             | 10   | 1355     |
+| KCR 7953  | KCR7953 | CAACCGTG.TATTTGAG | PFNA             | PFNA_9             | 10   | 2671     |
+| KCR 8195  | KCR8195 | CCACAATG.TCATATAT | Sodium_Arsenite  | Sodium_Arsenite_7  | 10   | 4404878  |
+| KCR 8195  | KCR8195 | TACAGAGT.TCATATAT | Sodium_Arsenite  | Sodium_Arsenite_9  | 10   | 2395550  |
+| KCR 8519  | KCR8519 | TACAGAGT.ATGTATCA | Sodium_Arsenite  | Sodium_Arsenite_9  | 10   | 4458760  |
+| KCR 8580  | KCR8580 | CCATACTC.CAATGCAA | BPA              | Bisphenol A_1      | 0.1  | 190179   |
+| KCR 8580  | KCR8580 | TCCTTGGC.CAATGCAA | BPA              | Bisphenol A_2      | 0.1  | 402214   |
+| KCR 8580  | KCR8580 | TCACTCAC.CAATGCAA | BPA              | Bisphenol A_3      | 0.1  | 366393   |
+| KCR 8580  | KCR8580 | CAGGCTTC.CAATGCAA | BPA              | Bisphenol A_4      | 1    | 286710   |
+| KCR 8580  | KCR8580 | CCTACACA.CAATGCAA | BPA              | Bisphenol A_5      | 1    | 204553   |
+| KCR 8580  | KCR8580 | CGCGTGAT.CAATGCAA | BPA              | Bisphenol A_6      | 1    | 238993   |
+| KCR 8580  | KCR8580 | CATCTTCT.CAATGCAA | BPA              | Bisphenol A_7      | 10   | 569666   |
+| KCR 8580  | KCR8580 | ACATCCTT.CAATGCAA | BPA              | Bisphenol A_8      | 10   | 122211   |
+| KCR 8580  | KCR8580 | ACACAACA.CAATGCAA | BPA              | Bisphenol A_9      | 10   | 110789   |
+| KCR 8580  | KCR8580 | ATGACACC.CAATGCAA | BPS              | Bisphenol S_3      | 0.1  | 3715079  |
+| KCR 8580  | KCR8580 | TGTTGCAC.CAATGCAA | BPS              | Bisphenol S_4      | 1    | 3866428  |
+| KCR 8580  | KCR8580 | ATTCTCCA.CAATGCAA | BPS              | Bisphenol S_5      | 1    | 2662372  |
+| KCR 8580  | KCR8580 | CGCAACAG.CAATGCAA | BPS              | Bisphenol S_6      | 1    | 2456087  |
+| KCR 8580  | KCR8580 | CTTCTGGC.CAATGCAA | BPS              | Bisphenol S_7      | 10   | 501850   |
+| KCR 8580  | KCR8580 | ATGGAACA.CAATGCAA | BPS              | Bisphenol S_8      | 10   | 433595   |
+| KCR 8580  | KCR8580 | CTAACAAC.CAATGCAA | BPS              | Bisphenol S_9      | 10   | 412276   |
+| KCR 8580  | KCR8580 | CAGAGTGG.CAATGCAA | DDE              | DDE_9              | 10   | 4263103  |
+| KCR 8580  | KCR8580 | CAGGCCAT.CAATGCAA | PFNA             | PFNA_1             | 0.1  | 330140   |
+| KCR 8580  | KCR8580 | CAACTCCG.CAATGCAA | PFNA             | PFNA_2             | 0.1  | 274683   |
+| KCR 8580  | KCR8580 | ACCGACCA.CAATGCAA | PFNA             | PFNA_3             | 0.1  | 160945   |
+| KCR 8580  | KCR8580 | GTGCGAGT.CAATGCAA | PFNA             | PFNA_4             | 1    | 232231   |
+| KCR 8580  | KCR8580 | ATGCCGCT.CAATGCAA | PFNA             | PFNA_5             | 1    | 228138   |
+| KCR 8580  | KCR8580 | TCCTCAGA.CAATGCAA | PFNA             | PFNA_6             | 1    | 63019    |
+| KCR 8580  | KCR8580 | ACGCTGCA.CAATGCAA | PFNA             | PFNA_7             | 10   | 57682    |
+| KCR 8580  | KCR8580 | CGATGGCA.CAATGCAA | PFNA             | PFNA_8             | 10   | 49925    |
+| KCR 8580  | KCR8580 | CAACCGTG.CAATGCAA | PFNA             | PFNA_9             | 10   | 133796   |
+
+: (#tab:komenrerun) Sample Re-runs for Komen Plexwell Experiment on 5/3/22. The Komen Plexwell re-runs includes *n = 104/576* of the original experimental samples that had less than a \<5E06 library size, or the total number of sequenced reads across all mapped genes in a sample run.
+:::
+
+## Reading in the data
+
+`r   margin_note("***NOTE**: When publishing your rmarkdown file, these files will be deleted from the folder due to the **_knitr_** embedding and **_pandoc_** file conversion process. To prevent this, go to the folder where you saved these file(s), right click the file -> '_properties_' -> select the '_Read-only_' checkbox -> hit '_apply_' -> exit by clicking '_OK_'.")` To get started, set up an RStudio project folder (i.e. `~/data directory/`) specifying where you have saved the [data files](#data-files-and-repositories). Import and read in the counts and sample metadata from [above](#data-files-and-repositories).\*
+
+```{r eval=FALSE}
+# Read the raw counts data into R
+seqdata <- read.table("~/Komen_Jun22_seqwell_counts.txt", header = T)
+
+# Read the sample metadata information into R
+all.metadata <- readxl::read_xlsx("~/Seq_well_re_runs_June2022.xlsx")
+```
+
+```{r Example of my setwd(), include=FALSE}
+# Read the raw counts data into R
+seqdata <- read.table("N:/Neil/Downloads/Michigan Stuff/Program/Research/Colacino/5-3-2022/May_22_PlexWell-20220503T203706Z-001/May_22_PlexWell/RData Workspace/jun22_plexwell_pre-processing_files/data/Komen_Jun22_seqwell_counts.txt", header = T)
+
+# Read the sample metadata information into R
+all.metadata <- readxl::read_xlsx("N:/Neil/Downloads/Michigan Stuff/Program/Research/Colacino/5-3-2022/May_22_PlexWell-20220503T203706Z-001/May_22_PlexWell/RData Workspace/jun22_plexwell_pre-processing_files/data/Seq_well_re_runs_June2022.xlsx")
+```
+
+<br>
+
+The `seqdata` file contains the gene-level raw counts for a given sample. Let's take a quick glance at the data. You can use the `dim` command to see how many rows and columns the data frame has. The `colnames` command will tell you the names of the columns. Use the `head` or `tail` command to see a preview of the first or last 6 lines of the data frame, respectively.
+
+```{r eval=FALSE}
+dim(seqdata)
+```
+
+<input type=button class=hideshow>
+
+```{r explore, echo=FALSE}
+dim(seqdata)
+```
+
+</input>
+
+```{r eval=FALSE}
+head(seqdata)
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+ tibble::as_tibble(head(seqdata))
+```
+
+</input>
+
+```{r eval=FALSE}
+colnames(seqdata)
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+colnames(seqdata)
+```
+
+</input>
+
+<br>
+
+The `seqdata` object also contains metadata information about the genes (one gene per row) in the wide-format:
+
+-   The first column contains the gene id symbols
+-   The second column has information about the genome alignment\* `r   margin_note("***NOTE**: The counts data was aligned to a combined human/mouse genome because of the Komen J2-fibroblast feeder layers and other experimental samples. When performing data packaging, make sure you're working with the correct species for your gene annotations.")`
+-   The third, fourth, and fifth column(s) contain genomic location/mapping and strand orientation information
+-   The sixth column contains the gene lengths
+-   The remaining columns contain information about the number of mapped reads aligning to the genes in each experimental sample
+
+<br>
+
+The `all.metadata` file contains detailed information about our samples. We will need to use this to separate, annotate, and analyze our Plexwell samples by experiment later on.
+
+```{r eval=FALSE}
+metadata
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+paged_table(all.metadata)
+```
+
+</input>
+
+## Formating the data
+
+As detailed by @phipson_rna-seq_2020, we need to manipulate and reformat the `seqdata` raw counts table into a suitable format for downstream analysis. To do so, we will create a new counts matrix for each experiment. Using the first two columns in the `seqdata` dataframe, we can store the gene identifiers for a species (i.e. Geneid symbols) as the `rownames` and the sample ID information as the `colnames` . We will add additional annotation information about each gene later on as well.
+
+Currently, the column names for the samples in the `seqdata` read counts table contain complex string identifiers. These are artefacts from the *.fastq* sequencing alignment and *featureCounts* post-alignment protocols.
+
+    X.nfs.colacino.Sequencing.ONES.Komen_Seqwell.6246.AT_nova.fastqs_6246.AT.6246.AT.1_
+    X.nfs.colacino.Sequencing.ONES.Komen_Seqwell.6246.AT_nova.fastqs_6246.AT.6246.AT.2_
+    Aligned.sortedByCoord.out.bam_[...]
+
+<br>
+
+Let's parse these out for clarity before we create new count matrices. `r   margin_note("_Tip_: When data processing, it is recommended to limit the number of intermediary variables you generate in your _Global Environment_. For instance, use the magrittr pipe operator from **_dplyr_** (i.e. %>%) or the native **_R_** pipe operator (|> req. _R_ 4.1+). This makes your code efficient and helps to prevent losing track of assigned variables.")`
+
+```{r counts matrix, paged.print=TRUE}
+# Clean up the counts table so we're only left with the 
+# unique ID barcodes as the sample colnames and the Geneid symbols as the rownames
+modified.counts <- seqdata %>% 
+  `rownames<-`(.[,1]) %>% select(-Geneid) %>% #Remove the Geneid column once you've set the rownames
+  select(starts_with('X.nfs.colacino.Sequencing.ONES.Komen_Seqwell.6246.AT_nova.fastqs_6246.AT.6246.AT') 
+         & ends_with('Aligned.sortedByCoord.out.bam')) %>%
+  rename_with(~str_remove
+              (., 'X.nfs.colacino.Sequencing.ONES.Komen_Seqwell.6246.AT_nova.fastqs_6246.AT.6246.AT.1_')) %>%
+  rename_with(~str_remove
+              (., 'X.nfs.colacino.Sequencing.ONES.Komen_Seqwell.6246.AT_nova.fastqs_6246.AT.6246.AT.2_')) %>% 
+  rename_with(~str_remove(., 'Aligned.sortedByCoord.out.bam')) %>%
+  rename_with(~str_remove(., '_S.*')) #remove parts of column name after certain characters
+```
+
+`r   margin_note("_Tip_: When data processing, it is also recommended to perform various 'sanity checks'. That is, confirm your results are what you expect. For instance, use the _head_ or _tail_ function to take a quick glance at your data.")`
+
+```{r eval=FALSE}
+#Look at the output 
+modified.counts
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+paged_table(modified.counts)
+```
+
+</input>
+
+## Organizing sample information
+
+Now that we've shortened the `seqdata` sample column names to contain only relevant information, we need to manipulate and match it with the `all.metadata` experimental design information. This will help to identify both the technical and biological replicates for a given experimental design factor.
+
+**Examples:**
+
+1.  Komen Plexwell Re-run
+
+-   Group (*i.e. ex-vivo patient derived cell-line*)
+-   Treatment (*i.e. chemicals, controls*)
+-   Dose (*i.e. 0, 0.1, 1, 10 uM*)
+
+2.  Rachel Morgan's Experiment
+
+-   organ (*i.e. heart, brain, cortex*)
+-   phenotype (*i.e. sex, age, disease status/morbidity*)
+
+3.  Katelyn Polemi's Experiment
+
+-   cell types/models (*i.e. MCF7, MCF10A*)
+-   sample treatment (*i.e. drug, control*)
+-   treatment dose (*i.e. 0.1, 1, 10 uM*)
+
+... *and etc.*
+
+Let's edit our `all.metadata` object to help separate the counts matrix based on experiment.
+
+<br>
+
+To match the `all.metadata` with the `seqdata`, we will use the i7 and i5 index barcode adapter sequences as our sample identifiers. Since the complementary DNA (cDNA) libraries for the RNA transcript pool were generated using reverse transcriptase, we need to make a new *sample.ids* column in the `all.metadata` for the `seqdata` `colnames` to match.
+
+`r   margin_note("_Tip_: When using the _match_ function, the first argument is the order of the object we want (_i.e. modified.counts_) and the second argument is the object we wanted to be reordered (_i.e. all.metadata_). We directly subset these indices to reorder the rows of the _all.metadata_ such that it matches the colnames of the _modified.counts_. Additionally, avoid manually parsing out the reverse transcripts; doing it by hand is error-prone and unnecessary.")`
+
+```{r rtmetadata}
+# Reverse transcribe the i5 sequences into reverse complementary nucleotide sequences
+all.metadata$`i5 Sequence` <- as.character(
+  reverseComplement(DNAStringSet(all.metadata$`i5 Sequence`))
+  )
+  
+# #Make a new sample.ids column in the metadata 
+# which concatenates the i7 sequence + "." + reverse complementary i5 sequence
+all.metadata <- all.metadata %>% 
+  mutate(sample.id = paste0(.$`i7 Sequence*`, ".", .$`i5 Sequence`))
+
+#Reorder the metadata rows so that it matches the order of the counts matrix columns
+all.metadata <- all.metadata[match(colnames(modified.counts), all.metadata$sample.id), ]
+```
+
+<br>
+
+Perform a sanity check and confirm the column names for `modified.counts` matches the `sample.id` column of the metadata and that the order is the same.
+
+```{r eval=FALSE}
+#Confirm the metadata and counts matrix match and are in the same order for the samples  
+all(all.metadata$sample.id == colnames(modified.counts))
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(all.metadata$sample.id == colnames(modified.counts))
+```
+
+</input>
+
+## Data splitting and exporting
+
+Now that our counts and metadata files are formatted properly, we need to separate the sample counts based on experiment. To recap, we have counts datasets for four different RNA-seq experiments stored in the single `modified.counts` object:
+
+1.  **Komen re-runs for the 5-3-22 experiment**
+2.  **Rachel Morgan**
+3.  **Katelyn Polemi**
+4.  **Linda Samuelson**
+
+We need to separate these experiments based on the following `all.metadata` patterns in the `Description` column:
+
+1.  **Komen re-runs for the 5-3-22 experiment**
+
+-   Contains "*7518 \| 7889 \| 7953 \| 8195 \| 8519 \| 8580*"
+
+2.  **Rachel Morgan**
+
+-   Starts with "*5Y \| 6\_*"
+-   Contains "*heart \| brain \| cortex*"
+
+3.  **Katelyn Polemi**
+
+-   Contains "*MCF7 \| MCF10A*"
+
+4.  **Linda Samuelson**
+
+-   Ends with "*V1 \| D1*"
+
+ 
+
+To split the counts data, we will need to first split the `all.metadata`. We can do this by using the base ***R*** `grepL` and ***tidyverse*** `filter` functions on the regex patterns listed above.
+
+Essentially, we first place our desired pattern matches in a character vector using `paste`, where `collapse` denotes the logical operator for *'or'* when indexing multiple patterns. The `filter` function then uses the logical outputs from `grepl` in the column we're matching for and extracts the rows of matched data accordingly.
+
+`r   margin_note("_Tip_: Saving your results to a list is _optional_. However, it is good storage object housekeeping practice and helps with downstream processing.")`
+
+```{r splitting data, max.height='300px'}
+
+#Split the all.metadata dataframe by filter & grep w/ multiple regex patterns
+  split.metadata.list <- list(
+    
+    #Komen re-run samples
+    filter(all.metadata, 
+           grepl(paste(c("7518","7889", "7953","8195", "8519", "8580"), collapse = "|"),
+                 all.metadata$Description)),
+    
+    #Rachel Morgan samples
+    filter(all.metadata, 
+           grepl(paste(c("heart","brain", "cortex","5Y", "6_"), collapse = "|"), 
+                 all.metadata$Description)),
+    
+    #Katelyn Polemi samples
+    filter(all.metadata,
+           grepl(paste(c("MCF7","MCF10A"), collapse = "|"), 
+                 all.metadata$Description)),
+    
+    #Linda Samuelson
+    filter(all.metadata,
+           grepl(paste(c("V1","D1"), collapse = "|"), all.metadata$Description))
+    
+      )
+  
+  #Be sure to name the metadata list entries in the proper order
+  names(split.metadata.list) <- c("komenredo.metadata",
+                                  "rachelm.metadata",
+                                  "katelynp.metadata",
+                                  "lindas.metadata")
+```
+
+<br>
+
+Let's check out the results:
+
+```{r eval=FALSE}
+split.metadata.list
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+split.metadata.list
+```
+
+</input>
+
+ 
+
+For an interactive paged table output, you will need to individually call on a specific list entry.[^1] For example, let's take a look at the paged table output of the Komen re-runs:
+
+[^1]: ^1^The Javascript dependencies needed to render the paged tables are not included in the `rmarkdown` html output. As described in this [post](https://stackoverflow.com/questions/63532652/printing-any-number-of-dataframes-stored-in-list-as-paged-tables-in-rmarkdown), one potential solution is to initialize the JS dependencies. However, this does not work with the '*hide/show output*' bootstrap buttons. Another solution is to use the `pander` package, which only prints the output as static tables.
+
+`r margin_note("**NOTE**: Multiple paged table interactive outputs w/ '_show/hide_' buttons do not work due to the Javascript dependencies not being included in the HTML output. _See [_footnotes_][References] for further details_.")`
+
+```{r eval=FALSE}
+paged_table(split.metadata.list[[1]]) #list index for komen re-run experiment
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+paged_table(split.metadata.list[[1]])
+```
+
+</input>
+
+<br>
+
+Now that we've split the `metadata` according to experiment, let's split the `modified.counts` using the `split.metadata.list`. Since we stored our split metadata in a list, we can efficiently generate our count matrix splits through recursion.
+
+```{r}
+#Create an empty storage object for the split count matrices
+split.counts <- c()
+
+#To avoid using for loops, we use lapply to store the results in a list
+split.counts <- lapply(split.metadata.list, function(x) {
+    select(modified.counts, matches(x$sample.id))
+})
+
+#Match the order of the split.counts entries using the split.metadata.list
+  #Use mapply when there are two or more lists needing recursion
+split.counts <- mapply(function(x, y) 
+  y[ ,match(x$sample.id, colnames(y))], split.metadata.list, split.counts)
+
+#The list elements are named using the split.metadata.list
+# Rename the list items to appropriately reflect the counts objects   
+names(split.counts) <- gsub('.metadata', '.counts', names(split.counts))
+```
+
+ 
+
+`r margin_note("**NOTE**: The manual 'sanity checks' for each list element shown here are for illustrative purposes. We could've also done this in a loop too. ")` Let's confirm the `split.counts` were split properly according to the `split.metadata.list`.
+
+```{r eval=FALSE}
+# Check that the column names of the counts data matches 
+# the values of the sample.id column in each experiment's metadata
+all(split.metadata.list$komenredo.metadata$sample.id == colnames(split.counts$komenredo.metadata))
+all(split.metadata.list$rachelm.metadata$sample.id == colnames(split.counts$rachelm.metadata))
+all(split.metadata.list$katelynp.metadata$sample.id == colnames(split.counts$katelynp.metadata))
+all(split.metadata.list$lindas.metadata$sample.id == colnames(split.counts$lindas.metadata))
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(split.metadata.list$komenredo.metadata$sample.id == colnames(split.counts$komenredo.metadata))
+```
+
+</input>
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(split.metadata.list$rachelm.metadata$sample.id == colnames(split.counts$rachelm.metadata))
+```
+
+</input>
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(split.metadata.list$katelynp.metadata$sample.id == colnames(split.counts$katelynp.metadata))
+```
+
+</input>
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(split.metadata.list$lindas.metadata$sample.id == colnames(split.counts$lindas.metadata))
+```
+
+</input>
+
+## *Optional: Exporting to CSV* {.unnumbered}
+
+`r margin_note("**NOTE**: This function saves the created folders and files to wherever you saved this rmarkdown code. It is _highly recommended_ to make a copy of these generated folders/files prior to editing or moving them.")` If you would like to share and analyze the curated data in excel, you can export the split lists to csv files:
+
+```{r eval=FALSE}
+#Be sure to set your working directory (or desired save folder) 
+#before creating these folders/files
+
+#Create a custom function which creates folders and files 
+#based on the list entry names
+csv_export_function <- function(x) {  
+  for(i in names(x)){
+    dir.create(paste0(i, "folder"), showWarnings = FALSE)
+    write.csv(x[[i]], file.path(paste0(i, "folder"), paste0(i,".csv"))
+              )
+    }
+  }
+
+# Generate folders and csv files
+csv_export_function(split.counts)
+csv_export_function(split.metadata.list)
+```
+
+## DGEList Conversion
+
+`r margin_note("**NOTE**: If you plan to use _**DESeq2**_ instead of _**edgeR**_ for your differential gene expression analysis, check out the [_DEFormats_ package](https://bioconductor.org/packages/devel/bioc/vignettes/DEFormats/inst/doc/DEFormats.html) to convert between the formal object classes.")` To streamline downstream processing and gene set testing, the counts matrix can be converted into a DGEList-object using the `DGEList` function. This is an object used by ***edgeR*** to store the counts data, metadata, and other various experimental parameters [@robinson_edger_2010].
+
+```{r}
+split.DGElist <- lapply(split.counts, function(x) DGEList(x))
+```
+
+```{r eval=FALSE}
+# Take a look at the DGELists
+split.DGElist
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+split.DGElist
+```
+
+</input>
+
+```{r eval=FALSE}
+# Examine the slots stored in a DGEList
+#  i.e. Komen re-run example
+#  Note: 'split.DGElist[[1]]' index and 
+#  '_split.DGElist$komenredo.counts_' refer to the same object
+names(split.DGElist[[1]])
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+names(split.DGElist[[1]])
+```
+
+</input>
+
+```{r eval=FALSE}
+# Library size information is automatically generated 
+# and stored in the $samples slot
+#  i.e. Komen re-run example
+split.DGElist[[1]]$samples
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+split.DGElist[[1]]$samples
+```
+
+</input>
+
+### Storing sample metadata {#storing-sample-metadata}
+
+The `DGEList` object is also able to store and associate metadata for the samples, aka our column names for the counts matrix. Since we previously matched the names and order of the `split.metadata.list`, we can store the group design factors for samples in `$samples$group`.
+
+For this example, we will modify the `split.metadata.list` entry for the Komen re-run experiment in order to streamline `DGEList` storage. We perform pattern matching on the `$Description` column to create our columns for the experimental design factors.
+
+```{r metadata edit, max.height='300px'}
+#Here we directly reference the entry name  
+split.metadata.list[["komenredo.metadata"]] <- 
+  split.metadata.list[["komenredo.metadata"]] %>%
+  #Create a column for patient cell-line groups
+  mutate(Sample = case_when(
+    
+    grepl("7518", .$Description) ~ 'KCR7518',
+    grepl("7889", .$Description) ~ 'KCR7889',
+    grepl("7953", .$Description) ~ 'KCR7953',
+    grepl("8195", .$Description) ~ 'KCR8195',
+    grepl("8519", .$Description) ~ 'KCR8519',
+    grepl("8580", .$Description) ~ 'KCR8580',
+    
+  )) %>% 
+  
+  #Create a column for chemical treatments
+  # Note: All chemicals did not require a re-run,
+  # but are referenced here just in case
+  mutate(Treatment = case_when(
+    
+    #Water-controlled chemicals
+    grepl("Water", .$Description) ~ 'Water',
+    grepl("Cadmium Chloride", .$Description) ~ 'Cadmium_Chloride',
+    grepl("Copper Chloride", .$Description) ~ 'Copper_Chloride',
+    grepl("Sodium Arsenite", .$Description) ~ 'Sodium_Arsenite',
+    grepl("Lead Acetate", .$Description) ~ 'Lead_Acetate',
+    
+    #DMSO-controlled chemicals
+    grepl("DMSO", .$Description) ~ 'DMSO',
+    grepl("DDE", .$Description) ~ 'DDE',
+    grepl("BPS", .$Description) ~ 'BPS',
+    grepl("BPA", .$Description) ~ 'BPA',
+    grepl("PFNA", .$Description) ~ 'PFNA',
+  )) %>% 
+
+  #Create a column for dose
+  # Note: Water and DMSO are dose 0 uM for 
+  # chemical classes
+  mutate(Dose = case_when(
+
+    grepl(paste(c("Water","DMSO"), collapse = "|"),
+                 .$Description) ~ '0',
+    grepl("0.1uM", .$Description) ~ '0.1',
+    grepl("1uM", .$Description) ~ '1',
+    grepl("10uM", .$Description) ~ '10'
+    
+  )) %>% 
+  
+  #Create a column for design matrix contrast factor levels
+  # Note: The design and contrast matrices 
+  #       are not covered in this pipeline,
+  #       but are here for reference
+  
+  mutate(cf_level = paste0(.$Sample, sep = "_", 
+                           .$Treatment, sep = "_", 
+                           .$Dose))
+```
+
+<br>
+
+Take a look at the modified `split.metadata.list[["komenredo.metadata"]]`:
+
+```{r eval=FALSE}
+split.metadata.list[["komenredo.metadata"]]
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+paged_table(split.metadata.list[["komenredo.metadata"]])
+```
+
+</input>
+
+<br>
+
+Now, we can store these modified metadata columns in the `$samples` tab of the `DGEList`:
+
+```{r}
+# Store patient cell-line groups into the DGEList
+split.DGElist$komenredo.counts$samples$group <- 
+  #Be sure to convert your strings as factors
+  as.factor(split.metadata.list[["komenredo.metadata"]]$Sample)
+
+# Store chemical treatments into the DGEList
+split.DGElist$komenredo.counts$samples$treatment <- 
+  #Be sure to convert your strings as factors
+  as.factor(split.metadata.list[["komenredo.metadata"]]$Treatment)
+
+# Store chemical doses into the DGEList
+split.DGElist$komenredo.counts$samples$dose <- 
+  #Be sure to convert your strings as factors
+  as.factor(split.metadata.list[["komenredo.metadata"]]$Dose)
+```
+
+```{r eval=FALSE}
+#Take a look at the added DGEList $samples information
+split.DGElist$komenredo.counts$samples
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+split.DGElist$komenredo.counts$samples
+```
+
+</input>
+
+<br>
+
+Let's double check that the stored row names of the metadata `$samples` information in the `DGEList` matches exactly to our column names of the counts data.
+
+```{r eval=FALSE}
+all(rownames(rownames(split.DGElist$komenredo.counts$samples)) 
+    == colnames(split.counts$komenredo.counts))
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(rownames(rownames(split.DGElist$komenredo.counts$samples)) == colnames(split.counts$komenredo.counts))
+```
+
+</input>
+
+ 
+
+For the Komen re-runs experiment, we were also concerned about the library size, the total number of sequenced read counts that were mapped to our human reference genome. Let's double check to see if our sample re-runs passed the coverage threshold of 5 million reads ($\geq$ 5E06):
+
+```{r eval=FALSE}
+#Check to see if all samples passed the sequencing depth cutoff
+all(split.DGElist[["komenredo.counts"]]$samples$lib.size >= 5000000)
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(split.DGElist[["komenredo.counts"]]$samples$lib.size >= 5000000)
+```
+
+</input>
+
+### Storing gene annotations
+
+Similar to how we stored sample information in the `DGEList`, we can also store gene-level information as well, aka the row names of our counts matrix. Currently, the only annotations we have in the `DGEList` counts matrix are the official gene id symbols (i.e. Human Genome Organisation (HUGO)).
+
+ 
+
+Let's add more informative gene information. For our demonstration, we will continue to use the Komen re-run example and the [*AnnotationDbi*](https://bioconductor.org/packages/release/bioc/html/AnnotationDbi.html) - [*org.Hs.eg.db*](https://bioconductor.org/packages/release/data/annotation/html/org.Hs.eg.db.html) packages.[^2] This is a human gene annotation database since we are querying human genes.
+
+[^2]: ^2^*Tip*: For additional ways to convert between gene id formats, check out this [excellent video tutorial from Khushbu Patel](https://youtu.be/cWe359VnfaY).
+
+`r margin_note("<br> **NOTE**: Be sure to use the correct gene annotation package for your experimental species.")` First, let's take a look at the information we want to retrieve. In order to see what information is available from the annotations database, run the `columns` function:
+
+```{r eval=FALSE}
+columns(org.Hs.eg.db)
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+columns(org.Hs.eg.db)
+```
+
+</input>
+
+<br>
+
+`r margin_note("**NOTE**: You will need to open and run this in **_R_** to see the help page.")` As you'll see, there is a lot of annotation information to choose from. If you want to learn more about the values for each of these columns, enter the `help` command in your ***R*** console . It will pull up a manual describing what the fields mean.
+
+```{r eval=FALSE}
+#Example: Consult the help page to learn what "OMIM" is
+help("OMIM")
+```
+
+For our komen re-run example, we will retrieve the following information[^3]: `r margin_note("_**Warning**_: The more information you want to retrieve, the more resource-intensive this operation becomes. Make sure you have enough allocation for memory and CPU resources, especially when retrieving multi-mapping information like '_ONTOLOGY_'. ")`
+
+[^3]: ^3^Ontology information retrieval is *optional* if you are performing gene set testing later on with *goana/CAMERA/ROAST/etc.* However, in order to display this information within interactive ***glimma*** plots, you need to include and embed this information early on. We do not include ontology retrieval here to limit resource usage and processing times.
+
+-   Commonly used unique gene IDs
+    -   "*ENSEMBL*"
+    -   "*ENTREZID*"
+-   Descriptive Info
+    -   "*GENENAME*"
+
+When we retrieve information from the `AnnotationDbi` database, we need to specify what information we are using as our 'query `key`'. In our Komen re-run example, this information would be our gene ID symbols used as the count `rownames`, aka `SYMBOL`. You can also use other information as the `keytypes` depending on the database and the information you have available.
+
+`r margin_note("_Tip_: When choosing your _keytypes_, it is recommended to choose a bijective input. For example, '_ENSEMBL_' ids are usually one-to-one matches, whereas keytypes such as 'ONTOLOGYALL' or 'PATH' are non-specific.")`
+
+```{r eval=FALSE}
+#Use this to see the list of keytypes 
+#available for your Annotation.Dbi database
+keytypes(org.Hs.eg.db)
+```
+
+ 
+
+We'll convert the gene id symbols to retrieve the data we want to extract. `r margin_note("**NOTE**: In our example, the gene rownames (i.e. keys) are actually the same as the original '_modified.counts_' object. However, if you already filtered and omitted genes prior, you would need to reference the rownames of the specific object as shown in the code.")`
+
+```{r}
+#Specify the database to query from 
+annot.gene.ids <- AnnotationDbi::select(org.Hs.eg.db, 
+       #Identify which genes you want to retrieve info on 
+       keys = rownames(split.DGElist[["komenredo.counts"]]$counts),
+       #Specify the type of input format for the gene ids from above
+       keytype = 'SYMBOL',
+       #Identify what information you want to retrieve
+       column = c('ENSEMBL', 'ENTREZID', 'GENENAME') 
+       )
+```
+
+You will notice the output returns the following statement: "*'select()' returned 1:many mapping between keys and columns*"
+
+`r margin_note("**NOTE**: For instance, a single Entrez ID can have multiple gene names on one or more chromsomes/chromosome strands. [_See this post for further details_](https://www.biostars.org/p/101151/).")` If this message occurs, we cannot directly add the annotation information into the `genes` slot of the `DGEList` just yet. This is because some of the gene-level information retrieved has multiple entries when mapping between the keys (*i.e. genes from count rownames*) and the columns (*i.e. Entrez IDs, ENSEMBL IDs, gene names*) [@phipson_rna-seq_2020].
+
+Before removing the duplicated gene IDs, be sure to review the duplicated gene IDs and understand the reason for duplication.
+
+```{r eval=FALSE}
+#Duplicated gene IDs
+annot.gene.ids %>% 
+  .[duplicated(.$SYMBOL), ]
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+#Duplicated gene IDs
+annot.gene.ids %>% 
+  .[duplicated(.$SYMBOL), ]
+```
+
+</input>
+
+<br>
+
+`r margin_note("_Tip_: Alternatively, you could perform the **_edgeR_** filtering function,  _filterByExpr_, prior to running these annotations.")` There's two approaches to handle these genes as discussed by @law2018:
+
+-   We could combine and merge all information from the multi-mapped genes such that the IDs and gene names would be merged into one column (i.e. *SYMBOL TBCE* would have an *ENSEMBL* id of *ENSG00000282984* and *ENSG00000285053*).
+    -   This is ***not recommended*** as merging the expression values for gene IDs requires proper rationale.
+-   We select one of the entries to represent the gene with duplicated annotations.`r margin_note("<br> **NOTE**: This duplicate removal by gene symbol ID only keeps the first occurrence. This will remove the following non-specific ENSEMBL, ENTREZID, or GENENAME entries. One solution is to perform gene set testing separately from gene annotations (not covered in this pipeline).")`
+    -   This is ***recommended*** as later on, we will filter out most unexpressed or very low expressed genes. In addition, depending on the enrichment used, the noise of the expression measurements is tolerable (*i.e. ncRNAs were not selected for in the enrichment*).
+
+<br>
+
+For simplicity purposes, we perform the second solution.
+
+To achieve 1:1 mapping for our `DGEList` counts, we can remove the duplicates using the following code:
+
+```{r}
+#Remove duplicates using the gene symbols
+annot.gene.ids <- annot.gene.ids %>% 
+  .[!duplicated(.$SYMBOL), ]
+```
+
+<br>
+
+We can also add the gene lengths from the `featureCounts` protocol to the `annot.gene.ids` using the original `seqdata` raw counts table.
+
+```{r , autodep=TRUE}
+#Merge a new gene lengths column at the end of the annot.gene.ids 
+#using the columns where the SYMBOL values are the same 
+# Note: The column names are referenced directly in quotes
+  annot.gene.ids <- annot.gene.ids %>% 
+    left_join(., seqdata[, c("Geneid", "Length")], by = c('SYMBOL' = 'Geneid'))
+```
+
+<br>
+
+Let's take a look at our gene annotations.
+
+```{r eval=FALSE}
+#View the gene annotations 
+annot.gene.ids
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+ paged_table(annot.gene.ids)
+```
+
+</input>
+
+<br>
+
+Let's also confirm the `SYMBOL` column entries matches exactly to the row names of `split.DGElist[["komenredo.counts"]][["counts"]]`.
+
+```{r eval=FALSE}
+all(annot.gene.ids$SYMBOL == rownames(split.DGElist[["komenredo.counts"]][["counts"]]))
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+all(annot.gene.ids$SYMBOL == rownames(split.DGElist[["komenredo.counts"]][["counts"]]))
+```
+
+</input>
+
+<br>
+
+Now that we have 1:1 matches with gene symbols and their corresponding annotations, we can append this to the `DGEList` `$genes` slot. `r margin_note("_Tip_: Since all the experiments came from the same _seqdata_ counts dataset, you could use this annotation information for the other experiments that focus on the human reference genome as well.")` Like with the sample annotations, the `annot.gene.ids` data frame is neatly stored and associated with the `DGEList` and the raw counts data.
+
+```{r}
+split.DGElist[["komenredo.counts"]]$genes <- annot.gene.ids
+```
+
+```{r eval=FALSE}
+# Annotated DGEList object with sample and gene information
+split.DGElist[["komenredo.counts"]]
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+split.DGElist[["komenredo.counts"]]
+```
+
+</input>
+
+# Data pre-processing & QC
+
+## Filter lowly expressed genes {#filter-lowly-expressed-genes}
+
+The counts dataset will contain genes that are expressed under certain experimental conditions and samples, but not in others. However, there are some genes that are unexpressed throughout all samples or contain very low gene counts not due to experimental conditions (*i.e. background noise*). These samples with low or zero read counts across all sample libraries should not be included within downstream differential expression analysis.
+
+As discussed by @law2018 and @phipson_rna-seq_2020, there are multiple reasons for filtering out these lowly expressed genes prior to downstream analyses:
+
+-   From a statistical standpoint, there is interference with approximations such as false discovery rates, mean-variance relationship, reducing power, and multiple testing burdens needed when trying to detect differentially expressed genes [@chen_reads_2016; @phipson_rna-seq_2020].
+
+-   From a biological standpoint, genes that are not expressed at any level in response to a condition across all samples are likely not interesting to begin with [@law2018].
+
+<br>
+
+In our Komen re-run samples, we see that approximately *\~35%* of genes have zero counts across all 123 samples. This is also shown in ***Figure*** \@ref(fig:filterdensplot)***A***.
+
+```{r zero count genes}
+#Summary of rows w/ TRUE across all sample columns 
+table(rowSums(split.DGElist[["komenredo.counts"]]$counts == 0) 
+      == ncol(split.DGElist[["komenredo.counts"]]$counts))
+
+#Optional: Save a copy of the DGEList prior to filtering for plot comparisons
+pre.filtered.raw <- split.DGElist[["komenredo.counts"]]
+```
+
+<br>
+
+To automatically filter out these lowly expressed genes and keep as many worthwhile gene counts as possible, we can use the `filterByExpr` in the ***edgeR*** package [@robinson_edger_2010]. To quote the documentation:
+
+> "The filtering keeps genes that have count-per-million (CPM) above *k* in *n* samples, where *k* is determined by `min.count` and by the sample library sizes and *n* is determined by the design matrix. [...] In addition, each kept gene is required to have at least `min.total.count` reads across all the samples."
+>
+> `r tufte::quote_footer('@chen_reads_2016')`
+
+For the *n* smallest group sample size, `filterByExpr` will take either the design matrix or group as an argument [@chen_reads_2016]. The default function will keep genes with approximately \~10 read counts or more in the *n* minimum sample size. Specifically, the filtering uses CPM values to avoid differential bias by library size; namely, larger library sizes have lower CPM cutoffs because of improved confidence in the resolution of low gene expression levels, whereas smaller library sizes have poorer sensitivity to explore low-expression levels, and therefore require higher CPM cutoffs [@law2018]. This allows for robust and flexible cutoffs based on the experimental design and sequencing depths.
+
+<br>
+
+For our purpose, we will use the chemical treatment as our baseline design factor to determine worthwhile sample groups. As we performed in the [DGEList conversion step](#storing-sample-metadata), this information is stored in the `split.DGElist$komenredo.counts$samples$treatment` tab of our DGEList. `r margin_note("_Tip_: You can confirm this yourself by typing in '_median(split.DGElist[[komenredo.counts]] $samples $lib.size)_'.")` To further explore 'under the hood' of the `filterByExpr` function, we see that our median library size in the Komen re-run experiment is 31579865 or *approx. \~32 million*.
+
+`r margin_note("**NOTE**: Technically, the _cpm(x, log = T)_ transformation returns 'pseudo-counts', which are calculated as log2(CPM + 2/L), where _2_ is the prior count and _L_ is the average library size in millions. This offset helps to avoid errors with logarithm of 0 values while ensuring identical counts have identical log-CPM values. For more details, check out the [side note section][Side Note: Why do we use raw-scale transformations?] and [the guide by Law et al (_2018_)](https://bioconductor.org/packages/release/workflows/vignettes/RNAseq123/inst/doc/limmaWorkflow.html#useful-graphical-representations-of-differential-expression-results).")` This means that the `filterByExpr` keeps genes that have a CPM of 10/31579865 = *approx. \~0.32* CPM or more in at least ***n*** samples in a chemical treatment. For example, in the '*PFNA*' treatment, a biologically interesting gene should be expressed in at least *n = 9* samples because every patient-derived cell line has 9 total samples for a given chemical treatment, not including the water/DMSO controls (*i.e. 3 doses \* 3 technical replicates for each biological replicate*).
+
+```{r}
+# Use filterByExpr to automatically filter counts 
+split.DGElist[["komenredo.counts"]] <-
+  #Subset the genes (i.e. rows) using chemical treatment
+  #as the min.group size filter
+  split.DGElist[["komenredo.counts"]][
+  filterByExpr(split.DGElist[["komenredo.counts"]], 
+               group = split.DGElist$komenredo.counts$samples$treatment), ,
+  keep.lib.sizes = FALSE]
+```
+
+`r margin_note("**NOTE**: The counts were directly subsetted and stored back as the new DGEList instead of creating an intermediary variable.")`
+
+```{r eval=FALSE}
+#Check out how many genes were filtered
+dim(split.DGElist[["komenredo.counts"]])
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+dim(split.DGElist[["komenredo.counts"]])
+```
+
+</input>
+
+ 
+
+Using this filtering criteria, we see the number of genes is reduced from 95566 to 42363 genes across all 123 samples, about a \~*56% decrease* in the number of genes that we started with (***Figure*** \@ref(fig:filterdensplot)***B***). Additionally, by subsetting the entire DGEList-object, this also removed both the counts and the associated gene information for the filtered rows, while correctly retaining the worthwhile counts and its associated information.
+
+For a comparison between un-filtered and filtered gene count distributions, see ***Figure*** \@ref(fig:filterdensplot) for density plots of the log2-CPM values in the Komen re-run experiment. The code used to produce these density plots is also provided below.[^4]
+
+[^4]: ^4^*Tip*: For a guide on using ***ggplots2*** functions from the ***tidyverse*** package with *DGEList* objects, check out this excellent guide from [Steve Pederson at the University of Adelaide, Australia](https://uofabioinformaticshub.github.io/DataVisualisaton_BIS2016/DataVisualisation.html).
+
+<button class="btn btn-primary btn-xs p-0" data-toggle="collapse" data-target="#filterdens">
+
+Show/Hide Code
+
+</button>
+
+::: {#filterdens .collapse}
+```{r filterdensity, class.source = 'foldable', eval=FALSE, message=FALSE, warning=FALSE, max.height='300px'}
+#Optional: When creating and publishing plots to PDFs, use par to specify the grid 
+# and mfrow to specify how many plots on each page (vector for rows x columns)
+par(mfrow=c(1,2))
+
+#Density plots for each Sample separated by Treatment x Dose 
+
+# A. Pre-filtered raw counts 
+# First, reshape log2-cpm data into long format for ggplots2 plotting aesthetics
+#   Note: melt() from reshape2 package converts matrix from wide-to-long
+ cpm(pre.filtered.raw, log = TRUE) %>%
+
+#  Matrix with two columns of text and one with the integer counts 
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+
+#  Combine with corresponding metadata for facet splits
+#   join data.frames with split.metadata.list[["komenredo.metadata"]]
+#   Note: Only the relevant metadata columns are subsetted to save memory 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+
+# Overview of ggplots2 plotting functions
+#  Note: Make sure to use data.frame objects from the DGEList
+  
+#  Introduce plotting aesthetics
+  ggplot(., aes(x = Count, fill = Sample, col = Sample)) +
+#  Choose type of plot geometry and opacity
+    geom_density(alpha = 0.15) +
+  
+#  Add vertical line to visualize filtering cutoff threshold 
+#  and change line type, color and size
+    geom_vline(
+      xintercept = 
+        log2(10/(median(pre.filtered.raw$samples$lib.size)*1e-6)
+             + 2/(mean(pre.filtered.raw$samples$lib.size)*1e-6)),
+      linetype="dashed", size=0.7) +
+
+#  Edit axes and legend titles
+    labs(x = "log2-CPM", y = "Density") +
+    ggtitle("A. Raw Data: Pre-filtered Counts") +
+#  Edit background theme and/or other elements (i.e. element_text(), element_line)
+    theme_bw() +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+#  Facets to subset sub-sections or separate multiple plots
+#   Note 1: _R_ syntax "~" means "is dependent on"
+#   Note 2: Axis scaling is set to be the same by default
+#           Scaling for grid can be set free using "free" for both axes
+#           and reformulate
+    facet_wrap(reformulate("Dose", "Treatment"), scales = "free", nrow = 3)
+
+
+#B. Post-filtered raw data (same process as above)
+ cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+
+# Overview of ggplots2 plotting functions
+#  Note: Make sure to use data.frame objects from the DGEList
+  ggplot(., aes(x = Count, fill = Sample, col = Sample)) +
+    geom_density(alpha = 0.15) +
+    #Note: The log2-CPM cutoff threshold is prior to filtering
+    geom_vline(xintercept = 
+        log2(10/(median(pre.filtered.raw$samples$lib.size)*1e-6)
+             + 2/(mean(pre.filtered.raw$samples$lib.size)*1e-6)),
+      linetype="dashed", size=0.7) +
+    labs(x = "log2-CPM", y = "Density") +
+    ggtitle("B. Filtered Data: Post-filtered Counts") +
+    theme_bw() +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+    facet_wrap(reformulate("Dose", "Treatment"), scales = "free", nrow = 3)
+```
+:::
+
+```{r filterdensplot, fig.show="hold", fig.cap="Density plots of overall gene expression for **_A._)** pre-filtered and **_B._)** post-filtered raw counts data within each chemical treatment x dose (uM) split by sample. The x-axes are log2-CPM (counts per million) scaled for all plots. **_A.)_** Overall expression distributions for sample cell-line groups are heavily right-skewed prior to filtering. Most genes are lowly-expressed or non-expressed with small or negative log2-CPM values.**_B._)** Filtering out irrelevant genes preserves the right-skewed trend and retains only genes with worthwhile counts. Dotted vertical lines mark the log2-CPM threshold (equivalent to a CPM value of _approx._ ~0.38) used in the filtering step.", fig.wide=TRUE, echo=FALSE, autodep=TRUE}
+#Optional: When creating and publishing plots to PDFs, use par to specify the grid 
+# and mfrow to specify how many plots on each page (vector for rows x columns)
+par(mfrow=c(1,2))
+
+#Density plots for each Each Sample x Treatment
+
+# A. Pre-filtered raw counts 
+# First, reshape log2-cpm data into long format for ggplots2 plotting aesthetics
+#   Note: melt() from reshape2 package converts matrix from wide-to-long
+cpm(pre.filtered.raw, log = TRUE) %>%
+
+#  Matrix with two columns of text and one with the integer counts 
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+
+#  Combine with corresponding metadata for facet splits
+#   join dataframes with split.metadata.list[["komenredo.metadata"]]
+#   Note: Only the relevant metadata columns are subsetted to save memory 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+
+# Overview of ggplots2 plotting functions
+#  Note: Make sure to use data.frame objects from the DGEList
+  
+#  Introduce plotting aesthetics
+  ggplot(., aes(x = Count, fill = Sample, col = Sample)) +
+#  Choose type of plot geometry and opacity
+    geom_density(alpha = 0.15) +
+  
+#  Add vertical line to visualize filtering cutoff threshold 
+#  and change line type, color and size
+    geom_vline(
+      xintercept = 
+        log2(10/(median(pre.filtered.raw$samples$lib.size)*1e-6)
+             + 2/(mean(pre.filtered.raw$samples$lib.size)*1e-6)),
+      linetype="dashed", size=0.7) +
+
+#  Edit axes and legend titles
+    labs(x = "log2-CPM", y = "Density") +
+    ggtitle("A. Raw Data: Pre-filtered Counts") +
+#  Edit background theme and/or other elements (i.e. element_text(), element_line)
+    theme_bw() +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+#  Facets to subset sub-sections or separate multiple plots
+#   Note 1: _R_ syntax "~" means "is dependent on"
+#   Note 2: Axis scaling is set to be the same by default
+#           Scaling for grid can be set free using "free" for both axes
+#           and reformulate
+    facet_wrap(reformulate("Dose", "Treatment"), scales = "free", nrow = 3)
+
+
+#B. Post-filtered raw data (same process as above)
+cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+
+# Overview of ggplots2 plotting functions
+#  Note: Make sure to use data.frame objects from the DGEList
+  ggplot(., aes(x = Count, fill = Sample, col = Sample)) +
+    geom_density(alpha = 0.15) +
+    #Note: The log2-CPM cutoff threshold is prior to filtering
+    geom_vline(xintercept = 
+        log2(10/(median(pre.filtered.raw$samples$lib.size)*1e-6)
+             + 2/(mean(pre.filtered.raw$samples$lib.size)*1e-6)),
+      linetype="dashed", size=0.7) +
+    labs(x = "log2-CPM", y = "Density") +
+    ggtitle("B. Filtered Data: Post-filtered Counts") +
+    theme_bw() +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+    facet_wrap(reformulate("Dose", "Treatment"), scales = "free", nrow = 3)
+```
+
+Here is an animated version of ***Figure*** \@ref(fig:filterdensplot) that helps visualize the magnitude of difference from the filtering step:
+
+<button class="btn btn-primary btn-xs p-0" data-toggle="collapse" data-target="#filterdensanim">
+
+Show/Hide Code
+
+</button>
+
+::: {#filterdensanim .collapse}
+```{r filteranim, class.source = 'foldable', eval=FALSE, message=FALSE, warning=FALSE, max.height='300px'}
+#Optional: Store the ggplot object frames to pass into gganimate
+# Warning: This takes awhile to render 
+
+library(gganimate)
+library(transformr)
+
+# A. Pre-filtered raw counts 
+pre.filterdensity.ggplot <- cpm(pre.filtered.raw, log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+  #Important: Create a constant value column for the graph title cycle 
+  mutate(transition = "A. Raw Data: Pre-filtered Counts")
+
+#B. Post-filtered raw data
+post.filterdensity.ggplot <- cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+  #Important: Create a constant value column for the graph title cycle
+  mutate(transition = "B. Filtered Data: Post-filtered Counts")
+
+#Merge dataframes 
+all.filterdensity.ggplot <- rbind(pre.filterdensity.ggplot, post.filterdensity.ggplot)
+
+all.filterdensity.gganim <- all.filterdensity.ggplot %>% 
+  ggplot(., aes(x = Count, fill = Sample, col = Sample)) +
+    geom_density(alpha = 0.15) +
+    #Note: The log2-CPM cutoff threshold is prior to filtering
+    geom_vline(xintercept = 
+        log2(10/(median(pre.filtered.raw$samples$lib.size)*1e-6)
+             + 2/(mean(pre.filtered.raw$samples$lib.size)*1e-6)),
+      linetype="dashed", size=0.7) +
+    theme_bw() +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+    facet_wrap(reformulate("Dose", "Treatment"), scales = "free", nrow = 3) + 
+    #Use the constant value column we created as the cycle titles
+    labs(title = "{closest_state}", x = "log2-CPM", y = "Density") +
+#Animation arguments
+#  Define variable/values on how data should be transformed  
+    transition_states(
+        transition,
+        transition_length = 1.5, #length of transition animation
+        state_length = 1 #how long to say on a certain state
+      ) +
+#  Additional animation aesthetics
+      enter_fade() + 
+      exit_shrink() +
+      ease_aes('sine-in-out') + 
+    view_follow()
+
+# Animate ggplot 
+animate(all.filterdensity.gganim, fps = 15, height = 12, 
+  width = 15, units = "in", res = 150)
+#optional: Save the file to your wd()
+anim_save("filtering_comparison.gif")
+```
+:::
+
+```{r filteranimprocessed, echo=FALSE, autodep=TRUE}
+#Optional: Store the ggplot object frames to pass into gganimate
+# Warning: This takes awhile to render 
+
+library(gganimate)
+library(transformr)
+
+# A. Pre-filtered raw counts 
+pre.filterdensity.ggplot <- cpm(pre.filtered.raw, log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+  #Important: Create a constant value column for the graph title cycle 
+  mutate(transition = "A. Raw Data: Pre-filtered Counts")
+
+#B. Post-filtered raw data
+post.filterdensity.ggplot <- cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id')) %>% 
+  #Important: Create a constant value column for the graph title cycle
+  mutate(transition = "B. Filtered Data: Post-filtered Counts")
+
+#Merge dataframes 
+all.filterdensity.ggplot <- rbind(pre.filterdensity.ggplot, post.filterdensity.ggplot)
+
+all.filterdensity.gganim <- all.filterdensity.ggplot %>% 
+  ggplot(., aes(x = Count, fill = Sample, col = Sample)) +
+    geom_density(alpha = 0.15) +
+    #Note: The log2-CPM cutoff threshold is prior to filtering
+    geom_vline(xintercept = 
+        log2(10/(median(pre.filtered.raw$samples$lib.size)*1e-6)
+             + 2/(mean(pre.filtered.raw$samples$lib.size)*1e-6)),
+      linetype="dashed", size=0.7) +
+    theme_bw() +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+    facet_wrap(reformulate("Dose", "Treatment"), scales = "free", nrow = 3) + 
+    #Use the constant value column we created as the cycle titles
+    labs(title = "{closest_state}", x = "log2-CPM", y = "Density") +
+#Animation arguments
+#  Define variable/values on how data should be transformed  
+    transition_states(
+        transition,
+        transition_length = 1.5, #length of transition animation
+        state_length = 1 #how long to say on a certain state
+      ) +
+#  Additional animation aesthetics
+      enter_fade() + 
+      exit_shrink() +
+      ease_aes('sine-in-out') + 
+    view_follow()
+
+# Animate ggplot 
+animate(all.filterdensity.gganim, fps = 15, height = 12, 
+  width = 15, units = "in", res = 150)
+#optional: Save the file to your wd()
+anim_save("filtering_comparison.gif")
+```
+
+ 
+
+### Side Note: Why do we use raw-scale transformations? {#side-note-why-do-we-use-raw-scale-transformations .unnumbered}
+
+Although we may operate and visualize raw counts, differential gene expression and downstream analyses are almost never evaluated at the raw counts level [@law2018]. This is because there are various potential biases that can influence and misrepresent our results. For instance, the relative number of transcript reads mapped to a gene is affected by sequencing depth (i.e. concentrations loaded onto flow cells, quality scores/QC checks, chemistry artefacts), the length of a gene (i.e. longer genes map more transcripts), gene isoforms/alternative splicing, and other library preparation factors (i.e. RNA enrichment selection, software/instrumentation, reagents, sample preparations, protocols, etc.) [@evans_selecting_2017; @johnson_robust_2022]. These various technical effects impact the effective library size and composition and obfuscate actual biological effects due to experimental conditions. As such, we adjust the relative expression levels to achieve more valid comparisons either within or between samples.
+
+`r margin_note("**NOTE**: As previously referenced, the log2-CPM cutoff threshold for the 'pseudo-counts' is actually calculated as log2(10/M + 2/L), where _M_ is the median library size, _2_ is the prior count, and _L_ is the average library size in millions. In our example, the minimum log-CPM is log2(2/(31852429 * 1e-6)) = ~ -3.99, or in other words, after adding the prior count offset (_2/L_), a log2-CPM value of -3.99 maps to a gene count of 0 for the dataset. For more details, [check out the guide by Law et al (_2018_)](https://bioconductor.org/packages/release/workflows/vignettes/RNAseq123/inst/doc/limmaWorkflow.html#useful-graphical-representations-of-differential-expression-results).")` In our `filterByExpr` example above, we used log2 counts-per-million (CPM) because it scales the counts by the number of transcript fragments sequenced and accounts for differences in sequencing depth between sample libraries; namely, each gene count is expressed as a proportion of the total number reads within a sample [@johnson_robust_2022]. In addition, the counts data is not normally distributed as seen with the multi-modal peaks and long right-tail in ***Figure*** \@ref(fig:filterdensplot)***B***. However, log2-CPM does not adjust for gene length. For our Komen re-run comparisons, we assume gene lengths remain constant and that there are no major differences in isoform usage between experimental conditions [@law2018]. To ensure that observed biological effects are due to experimental conditions rather than gene lengths, additional QC checks were also performed upstream during *featureCounts* alignment and mapping using splice-aware alignment tools.
+
+## Normalize gene expression distributions
+
+Often, there is 'undesirable' batch variation from experimental conditions as previously discussed for the reasons [above](#side-note-why-do-we-use-raw-scale-transformations). Therefore, technical effects unrelated to the biological factors of interest need to be accounted for when examining expression differences between samples. Ideally, all samples in an experiment would have a similar range and distribution of expression values for between-sample comparisons [@law2018]. Following our filtering step, let's examine the sample expression distributions to detect any abnormalities.
+
+To extend on the information from the density plots in ***Figure*** \@ref(fig:filterdensplot)***B***, we are also interested in looking at summary statistics such as the center, spread, and any outliers of the numerical data. A nifty visualization we can use is the box-violin plot --- a combination of a box plot and violin plot overlayed on top of each other. From panel A of ***Figure*** \@ref(fig:normboxvio), we see the spread and median of the un-normalized log2-CPM expression values varies widely across different samples. Specifically, the notches of the box-violin plots approximate the 95% confidence intervals for the sample median:
+
+```{=tex}
+\begin{equation}
+  median\pm 1.57\times\frac{IQR}{\sqrt{n}}
+  (\#eq:notchCI)
+\end{equation}
+```
+Although our raw counts data observes a non-gaussian, right-skewed distribution, we generally see that many of the confidence intervals for the log2-CPM medians do not overlap (***Figure*** \@ref(fig:normboxvio)***A***). That is, we are 95% confident that the medians do significantly differ.
+
+<br>
+
+To address these discrepancies in expression distributions, a common approach is to use the `calcNormFactors` trimmed mean of M-values (TMM) method for between-sample normalizations [@robinson_scaling_2010]. To briefly overview the method documentation:
+
+> "TMM normalizes across samples by finding a subset of genes whose variation is mostly due to technical rather than biological factors, i.e., not differentially expressed, then using this subset to calculate a scaling factor to adjust each sample. In brief, each sample is compared to a chosen reference sample. A certain upper and lower percentage of data based on absolute intensity and log-fold-change relative to the reference sample is removed (by default, 5% for absolute intensity and 30% for log-fold-change) and the log-fold-changes of the remaining set of genes are used to calculate a single scaling factor for the non-reference samples."
+>
+> `r tufte::quote_footer('@johnson_robust_2022; @robinson_scaling_2010')`
+
+In short, TMM is a robust method that identifies a reference sample and filters out biased genes per each sample to calculate scaling factors for library size and composition normalization [@robinson_scaling_2010].[^5] When using the `calcNormFactors` function to calculate scaling factors, the raw counts data are not directly modified nor stored. Instead, the normalization factors for effective library sizes are automatically stored in the DGEList-object path, `~$samples$norm.factors`, and are applied automatically in functions and downstream analyses [@law2018].
+
+[^5]: ^5^For an in-depth, step-by-step breakdown of the TMM method, check out this [excellent tutorial from Joshua Starmer, PhD](https://youtu.be/Wdt6jdi-NQo).
+
+<br>
+
+For our Komen re-run dataset, the effects of TMM-normalization are noticeable as the magnitude of scaling factors range from \~ 0.61 to 1.76. These normalization factors are used to multiply across sample libraries. Specifically, a factor below one indicates downscaling of the library size relative to other sample libraries [@phipson_rna-seq_2020]. This suggests a limited pool of genes with high counts dominated the sequencing depth, which lead to lower than usual counts assigned for other genes in the library [@chen_reads_2016]. As such, these scaling factors below one would also upscale individual gene counts in a sample. Likewise, scaling factors above one upscale the total library size relative to other samples, but downscale certain individual gene counts [@phipson_rna-seq_2020]. Scaling factors close to the default value of 1 indicate limited need for correction factors with TMM normalization. Together, TMM normalization suppresses composition bias while preserving gene expression trends across all samples [@phipson_rna-seq_2020]. To further visualize the effects of post-TMM normalization, see ***Figure*** \@ref(fig:normboxvio)***B***.
+
+```{r eval=FALSE}
+#Optional: Save a copy of the DGEList prior to normalization for plot comparisons
+pre.norm.raw <- cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id'))
+
+#Apply normalization to DGEList 
+# Note: You can specify a different normalization method if desired; default is TMM 
+# (i.e. upper quartile, relative log expression, etc.) 
+split.DGElist[["komenredo.counts"]] <- calcNormFactors(split.DGElist[["komenredo.counts"]]
+                                                       , method = "TMM")
+
+#View the normalization scaling factors
+split.DGElist[["komenredo.counts"]]$samples$norm.factors
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+#Optional: Save a copy of the DGEList prior to normalization for plot comparisons
+pre.norm.raw <- cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+  melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id'))
+
+#Apply normalization to DGEList 
+# Note: You can specify a different normalization method if desired; default is TMM 
+# (i.e. upper quartile, relative log expression, etc.) 
+split.DGElist[["komenredo.counts"]] <- 
+  calcNormFactors(split.DGElist[["komenredo.counts"]], method = "TMM")
+
+#View the normalization scaling factors
+split.DGElist[["komenredo.counts"]]$samples$norm.factors
+```
+
+</input>
+
+<button class="btn btn-primary btn-xs p-0" data-toggle="collapse" data-target="#normboxviocode">
+
+Show/Hide Code
+
+</button>
+
+::: {#normboxviocode .collapse}
+```{r normboxviodisplay, class.source = 'foldable', eval=FALSE, message=FALSE, warning=FALSE, max.height='300px'}
+#Notched box-violin plots for each Treatment x Dose split by Sample
+
+# A. Pre-normalization 
+#  Introduce plotting aesthetics
+#   i.e. log2-CPM (y-axis) grouped by treatment x dose (x-axis; needs to be factor)
+#        which is further split by sample group
+  ggplot(pre.norm.raw, aes(x = interaction(Treatment, Dose), y = Count, fill = Sample)) +
+
+#  Choose plot geometries and opacities/display settings
+#  Violin Plot
+    geom_violin(alpha=0.75, position = position_dodge(width = .75), size=1, color=NA) +
+
+#  Notched boxplot  
+  stat_boxplot(geom = "errorbar") +
+  geom_boxplot(notch = TRUE, color="black",lwd=1, alpha = 0.5) +
+  
+#  Add a red horizontal line to visualize median log2CPM across all samples 
+    geom_hline(yintercept = median(pre.norm.raw$Count), linetype="dashed", color = "red") +
+
+#  Edit axes and legend titles
+    labs(x = "Treatment x Dose (uM)", y = "Log2 counts per million") +
+    ggtitle("A. Notched box-violin plots of log2CPMs (un-normalized)") +
+    
+#  Edit background theme and/or other elements
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) + 
+    theme_bw() +
+
+#   Optional: Use viridis or rcolorbrewer for color schemes
+    scale_fill_viridis_d(option = "viridis")
+
+
+# B. Post-normalization 
+ post.norm.raw <- cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+ melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id'))
+#  Introduce plotting aesthetics
+#   i.e. log2-CPM (y-axis) grouped by treatment x dose (x-axis; needs to be factor)
+#        which is further split by sample group
+  ggplot(post.norm.raw, aes(x = interaction(Treatment, Dose), y = Count, fill = Sample)) +
+
+#  Choose plot geometries and opacities/display settings
+#  Violin Plot
+    geom_violin(alpha=0.75, position = position_dodge(width = .75), size=1, color=NA) +
+
+#  Notched boxplot  
+  stat_boxplot(geom = "errorbar") +
+  geom_boxplot(notch = TRUE, color="black",lwd=1, alpha = 0.5) +
+  
+#  Add a red horizontal line to visualize median log2CPM across all samples 
+    geom_hline(yintercept = median(post.norm.raw$Count), linetype="dashed", color = "red") +
+
+#  Edit axes and legend titles
+    labs(x = "Treatment x Dose (uM)", y = "Log2 counts per million") +
+    ggtitle("B. Notched box-violin plots of log2CPMs (TMM normalized)") +
+    
+#  Edit background theme and/or other elements
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) + 
+    theme_bw() +
+
+#   Optional: Use viridis or rcolorbrewer for color schemes
+    scale_fill_viridis_d(option = "viridis")
+```
+:::
+
+```{r normboxvio, fig.dim = c(17, 8), fig.cap="Notched box-violin plots of gene expression for **_A._)** pre-normalized and **_B._)** post-normalized log2-CPM (counts per million) data for each chemical treatment x dose (uM) split by sample. The log2 counts-per-million (log2-CPM) values are on the y-axis. **_A.)_** The spread and median of the un-normalized log2-CPM expression values vary widely across different samples. Confidence intervals for the log2-CPM median show discordance at α = 0.05. **_B._)** Normalization with TMM preserves the right-skewed, non-gaussian trend and helps standardize the expression distribution. Notches approximate the 95% confidence intervals for the sample median. Dotted horizontal line corresponds to the median log2-CPM across all samples.", fig.wide=TRUE, fig.show='hold', echo=FALSE}
+#Notched box-violin plots for each Treatment x Dose split by Sample
+
+# A. Pre-normalization 
+  ggplot(pre.norm.raw, aes(x = interaction(Treatment, Dose), y = Count, fill = Sample)) +
+  geom_violin(alpha=0.75, position = position_dodge(width = .75), size=1, color=NA) +
+  stat_boxplot(geom = "errorbar") +
+  geom_boxplot(notch = TRUE, color="black",lwd=1, alpha = 0.5) +
+  geom_hline(yintercept = median(pre.norm.raw$Count), linetype="dashed", color = "red") +
+    labs(x = "Treatment x Dose (uM)", y = "Log2 counts per million") +
+    ggtitle("A. Notched box-violin plots of log2CPMs (un-normalized)") +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) + 
+    theme_bw() +
+    scale_fill_viridis_d(option = "viridis")
+
+
+# B. Post-normalization 
+ post.norm.raw <- cpm(split.DGElist[["komenredo.counts"]], log = TRUE) %>%
+ melt(., value.name = "Count", varnames = (c('Symbol', 'sample.id'))) %>% 
+  left_join(., split.metadata.list[["komenredo.metadata"]][, 7:10], by = c('sample.id'))
+
+  ggplot(post.norm.raw, aes(x = interaction(Treatment, Dose), y = Count, fill = Sample)) +
+  geom_violin(alpha=0.75, position = position_dodge(width = .75), size=1, color=NA) +
+  stat_boxplot(geom = "errorbar") +
+  geom_boxplot(notch = TRUE, color="black",lwd=1, alpha = 0.5) +
+  geom_hline(yintercept = median(post.norm.raw$Count), linetype="dashed", color = "red") +
+    labs(x = "Treatment x Dose (uM)", y = "Log2 counts per million") +
+    ggtitle("B. Notched box-violin plots of log2CPMs (TMM normalized)") +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) + 
+    theme_bw() +
+    scale_fill_viridis_d(option = "viridis")
+```
+
+Here is an animated version of ***Figure*** \@ref(fig:normboxvio) to visualize the performance of TMM normalization:
+
+<button class="btn btn-primary btn-xs p-0" data-toggle="collapse" data-target="#animboxvionorm">
+
+Show/Hide Code
+
+</button>
+
+::: {#animboxvionorm .collapse}
+```{r boxvioanim,class.source = 'foldable', eval=FALSE, message=FALSE, warning=FALSE, max.height='300px'}
+#Optional: Store the ggplot object frames to pass into gganimate
+# Warning: This takes awhile to render 
+
+# A. Pre-normalization 
+pre.norm.ggplot <- pre.norm.raw %>% 
+  #Important: Create a constant value column for the graph title cycle 
+  mutate(transition = "A. Notched box-violin plots of log2CPMs (un-normalized)")
+
+# B. Post-normalization 
+post.norm.ggplot <- post.norm.raw %>% 
+  #Important: Create a constant value column for the graph title cycle
+  mutate(transition = "B. Notched box-violin plots of log2CPMs (TMM normalized)")
+
+#Merge dataframes 
+all.norm.ggplot <- rbind(pre.norm.ggplot, post.norm.ggplot)
+
+all.norm.gganim <- all.norm.ggplot %>% 
+  ggplot(., aes(x = interaction(Treatment, Dose), y = Count, fill = Sample)) +
+  geom_violin(alpha=0.75, position = position_dodge(width = .75), size=1, color=NA) +
+  stat_boxplot(geom = "errorbar") +
+  geom_boxplot(notch = TRUE, color="black",lwd=1, alpha = 0.5) +
+  geom_hline(yintercept = median(all.norm.ggplot$Count), linetype="dashed", color = "red") +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) + 
+    theme_bw() +
+    scale_fill_viridis_d(option = "viridis") +
+    #Use the constant value column we created as the cycle titles
+  labs(title = "{closest_state}", x = "Treatment x Dose (uM)", y = "Log2 counts per million") +
+
+#Animation arguments
+#  Define variable/values on how data should be transformed  
+    transition_states(
+        transition,
+        transition_length = 1.5, #length of transition animation
+        state_length = 1 #how long to say on a certain state
+      ) +
+#  Additional animation aesthetics
+      enter_fade() + 
+      exit_shrink() +
+      ease_aes('sine-in-out') 
+
+# Animate ggplot 
+animate(all.norm.gganim, fps = 15, height = 15, 
+  width = 15, units = "in", res = 150)
+#optional: Save the file to your wd()
+anim_save("TMM_norm_comparison.gif")
+```
+:::
+
+```{r normboxvioanim, echo=FALSE, autodep=TRUE}
+#Optional: Store the ggplot object frames to pass into gganimate
+# Warning: This takes awhile to render 
+
+# A. Pre-normalization 
+pre.norm.ggplot <- pre.norm.raw %>% 
+  #Important: Create a constant value column for the graph title cycle 
+  mutate(transition = "A. Notched box-violin plots of log2CPMs (un-normalized)")
+
+# B. Post-normalization 
+post.norm.ggplot <- post.norm.raw %>% 
+  #Important: Create a constant value column for the graph title cycle
+  mutate(transition = "B. Notched box-violin plots of log2CPMs (TMM normalized)")
+
+#Merge dataframes 
+all.norm.ggplot <- rbind(pre.norm.ggplot, post.norm.ggplot)
+
+all.norm.gganim <- all.norm.ggplot %>% 
+  ggplot(., aes(x = interaction(Treatment, Dose), y = Count, fill = Sample)) +
+  geom_violin(alpha=0.75, position = position_dodge(width = .75), size=1, color=NA) +
+  stat_boxplot(geom = "errorbar") +
+  geom_boxplot(notch = TRUE, color="black",lwd=1, alpha = 0.5) +
+  geom_hline(yintercept = median(all.norm.ggplot$Count), linetype="dashed", color = "red") +
+    theme(legend.justification = "bottom") +
+    theme(plot.title = element_text(color="black", size=14, face="bold.italic")) + 
+    theme_bw() +
+    scale_fill_viridis_d(option = "viridis") +
+    #Use the constant value column we created as the cycle titles
+  labs(title = "{closest_state}", x = "Treatment x Dose (uM)", y = "Log2 counts per million") +
+
+#Animation arguments
+#  Define variable/values on how data should be transformed  
+    transition_states(
+        transition,
+        transition_length = 1.5, #length of transition animation
+        state_length = 1 #how long to say on a certain state
+      ) +
+#  Additional animation aesthetics
+      enter_fade() + 
+      exit_shrink() +
+      ease_aes('sine-in-out') 
+
+# Animate ggplot 
+animate(all.norm.gganim, fps = 15, height = 15, 
+  width = 15, units = "in", res = 150)
+#optional: Save the file to your wd()
+anim_save("TMM_norm_comparison.gif")
+```
+
+## Unsupervised clustering with multidimensional scaling plot (MDS) {#unsupervised-clustering-with-multidimensional-scaling-plot-mds}
+
+As highlighted by @law2018 and @phipson_rna-seq_2020, an important plot for quality control and exploratory analysis of RNA-seq expression data is the multidimensional scaling plot (MDS). We need to perform quality checks on our data and confirm whether to re-evaluate/exclude samples from downstream analysis. In other words, we need to confirm the main source of variation in the expression signatures of our samples was due to experimental conditions and not 'unwanted' confounding.
+
+In simple scenarios with two features or less (i.e. genes), we could utilize scatter plots or other basic visualizations to compare the expression levels between samples and confirm clusters of similarities/differences [@mcdermaid_interpretation_2018]. However, even after our [filtering step](#filter-lowly-expressed-genes), our normalized counts matrix contains an immense amount of transcription data (*i.e. 42363 genes x 123 samples*). It is impossible to manually perform all pairwise combinations of expression levels and visualize these vast dimensions. An efficient way to overcome this hurdle is to generate a Multidimensional Scaling (MDS) Plot, an unsupervised dimensionality reduction technique that allows us to visualize distances and clusters of separation between samples in a 2-D graph without having to specify groups [@law2018; @phipson_rna-seq_2020].
+
+<br>
+
+Using the MDS plot (***Figure*** \@ref(fig:MDS), *left*) and an accompanying scree plot (***Figure*** \@ref(fig:MDS), *right*), we can condense the gene expression information across all samples and confirm whether we expect to find interesting differences prior to any downstream analyses. We use the function `glimmaMDS` from the ***glimma*** package to create the plot. Here are some benefits to using the interactive *glimma* plot rather than a static display [@su_glimma_2017]:
+
+-   Hovering over individual MDS data point projections will reveal additional information about the sample (***Figure*** \@ref(fig:MDS), *left*)
+-   Customizable labeling aesthetics such as scaling, coloration, and shapes to enhance cluster identification with multiple experimental designs and factors of interest
+-   Select which Principal Component dimensions are plotted in the MDS plot
+-   Examine the proportion of variation (i.e. eigenvalues) explained by multiple Principal Component dimensions in the scree plot (***Figure*** \@ref(fig:MDS), *right*)
+-   Append annotations that need edits or were not included upstream
+
+To gauge whether our experimental design factors contribute meaningful expression differences, we will examine how our Komen re-run samples cluster and separate in the dimensions listed. For the MDS demonstration, the Euclidean distances for the Principle Coordinate Analysis are calculated using the average (i.e. root-mean-square) log2-fold changes for the top 500 genes divergent between pairs of samples [@su_glimma_2017; @law2018].
+
+<br>
+
+```{r MDS, fig.cap="Multidimensional scaling plot (MDS) (**_left_**) and scree barplot (**_right_**) of log2-CPM values over default dimensions 1 and 2. Principle Coordinate Analysis was performed using the Euclidean distance metric for the average (_i.e. root-mean-square_) log2-fold changes of the top 500 genes divergent between pairs of samples.", fig.wide=TRUE, fig.show='asis', results='asis', echo=FALSE}
+glimmaMDS(split.DGElist[["komenredo.counts"]])
+```
+
+In the scree barplot (***Figure*** \@ref(fig:MDS), *right*), the first two dimensions represent the largest proportion of variation in log2-fold changes amongst the samples. When we take a closer look at the MDS plot (***Figure*** \@ref(fig:MDS), *left*), we see that dimension 1, the bulk source of variation, is explained by the experimental groups. That is, the samples primarily separate or cluster together in transcriptional patterns based on interindividual heterogeneity. Taking a closer look, although all samples cluster by group, the largest difference between *ex-vivo* cell lines are observed between patient-donors *KCR7953* and *KCR7518* over dimension 1 at approximately \~ 6 units (i.e. 2\^6 = 64-fold leading fold change) [@chen_reads_2016]. If we were to compare between cell populations in these individuals, we might expect stark differences in the total number of differentially expressed genes (DEGs). Another way to interpret this is that the differential expression appears to be greater than the variance (*i.e. inter-sample differences are larger than intra-sample differences*), and therefore differential expression is likely to be detected [@phipson_rna-seq_2020]. In contrast, comparing samples *KCR8519* and *KCR7518* may exhibit a smaller difference in DEGs when performing pairwise comparisons. Additionally, there does not appear to be a clear separation by race, but rather by individual.
+
+Following, we see that subsequent orthogonal combinations of dimensions have a much more subdued effect, where clustering by chemical treatment and dose appear to explain the remaining slivers of expression differences in dimensions 2 and 3, respectively. `r margin_note("**NOTE**: The higher the dimension, the smaller the proportion of varation expalined.")` For instance, there may be limited evidence of differential expression for lower doses of chemical treatments (*i.e. see clustering of KCR 7953*). We can also confirm that technical replicates for samples of the same group successfully cluster together in the MDS plot (*i.e. within-sample similarities versus between-sample differences*). If there were batch effects or outliers, the MDS plot could also inform us on how to adjust the design matrix [@phipson_rna-seq_2020].
+
+<br>
+
+Overall, the MDS plot helped to confirm that our Komen re-run experiment was successful and controlled well for potential batch effects and sources of error [@phipson_rna-seq_2020]. Our greatest sources of variation in the expression data are primarily attributed to the experimental conditions we are interested in such as groups and treatments. We can therefore proceed with linear modelling of these experimental design factors in differential gene testing and downstream analyses. Horay! *Stay tuned for Part 2: Differential Expression Analysis...*
+
+<br>
+
+### Side Note: More on MDS and how it works... {.unnumbered}
+
+In our example [above](#unsupervised-clustering-with-multidimensional-scaling-plot-mds), we performed MDS using the Euclidean distance metric and singular value decomposition (SVD), which is akin to Principle Coordinate Analysis. To review, MDS/PCoA with SVD starts by plotting the coordinate expression data across all *n* genes (*i.e. rows*) for each *m* sample (*i.e. columns*), finds the center of the data using the averaged gene measurements in each row across all samples, and utilizes this center as the origin change of basis [@starmer_statquest_2018]. Specifically, a line of best fit that goes through the origin is adjusted until the orthogonal combinations minimizes the linear distance between data points and maximizes the sum of squared distances (*i.e. eigenvalue*) from the projected points to the origin; this line is a Principle Component (PC) [@tzeng_multidimensional_2008; @starmer_statquest_2018]. Additional PCs are added by finding perpendicular lines to the previous PC(s) that go through the origin; the maximum number of PCs generated is the smaller number of either *n* variables (*i.e. genes*) or *m* samples (*i.e. columns*) [@tzeng_multidimensional_2008; @starmer_statquest_2018]. These principal components help explain how data are spread out along different linear combinations and informs the percent of variation accounted for by each axis [@starmer_statquest_2018].
+
+Once all the linear combinations of PCs have been generated, the singular unit vectors (*i.e. eigenvectors*) are determined from the proportions of loading scores, or correlations between original variables (*i.e. genes*) and unit-scaled components [@tzeng_multidimensional_2008]. Loading scores help determine which variables have the largest effect by projecting the sample coordinates onto the graph [@tzeng_multidimensional_2008]. Variation around the origin is calculated by dividing the eigenvalue (*i.e.* sum of sq. distances for a PC) by the sample size - 1 (*i.e. m - 1*) [@starmer_statquest_2018]. You can use the eigenvalues (*i.e.* sum of squared distances) to determine the proportion of variation accounted for by each PC. The scree plot shown on the right-hand side of ***Figure*** \@ref(fig:MDS) is a graphical representation of the percentage of variation accounted for by each PC. Together, these transformations and projections help approximate the different patterns of variance and associations between variables in reduced dimensions. Alternatively, another commonly used approach is to perform eigen-decomposition on a covariance matrix, which is not discussed here [@tzeng_multidimensional_2008].
+
+<br>
+
+For more details, check out the [references] and [footnotes].
+
+# Session info {.unnumbered}
+
+For record-keeping and reproducibility purposes, this session information documents the versions of R and of the software/packages that were used in this pipeline.
+
+```{r sessionInfo, echo=FALSE}
+sessionInfo()
+```
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
+
+# Footnotes {.unnumbered}
+
+::: {#footnotes}
+:::
+
+```{=html}
+<script>
+$( "input.hideshow" ).each( function ( index, button ) {
+  button.value = 'Hide Output';
+  $( button ).click( function () {
+    var target = this.nextSibling ? this : this.parentNode;
+    target = target.nextSibling.nextSibling;
+    if ( target.style.display == 'block' || target.style.display == '' ) {
+      target.style.display = 'none';
+      this.value = 'Show Output';
+    } else {
+      target.style.display = 'block';
+      this.value = 'Hide Output';
+    }
+  } );
+} );
+
+$("input.hideshow").click()
+</script>
+```
