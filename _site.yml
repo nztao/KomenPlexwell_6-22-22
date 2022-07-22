@@ -4,7 +4,7 @@ navbar:
   title: "Colacino Lab"
   left:
     - text: "Home"
-      href: https://www.colacinolab.com/
+      href: index.html
   right: 
     - icon: fa-envelope fa-lg
       href: mailto:<neilzhao@umich.edu>
