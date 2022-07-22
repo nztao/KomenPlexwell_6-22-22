@@ -5,4 +5,4 @@
   
 ![](https://sph.umich.edu/news/2021posts/images/sph-building-exterior.jpg)
 
-_**[© 2022 Colacino lab](https://www.colacinolab.com/)**_
+_**[© 2022 Colacino Lab](https://www.colacinolab.com/)**_
