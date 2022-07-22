@@ -1,0 +1,31 @@
+title: "Bulk RNA-Seq: Data Pre-processing for June 22 Plexwell"
+author:
+- name: Neil Zhao
+  affiliation: &id Department of Environmental Health Sciences, School of Public Health, University of Michigan-Ann Arbor, 1415 Washington Heights, Ann Arbor, MI, 48109-2029, USA
+- name: Anagha Tapaswi
+  affiliation: *id
+- name: Justin Colacino
+  affiliation: *id
+package: BiocStyle
+output:
+  BiocStyle::html_document:
+    code_download: TRUE
+    code_folding: show
+    theme: cerulean  
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+abstract: |
+  In this brief workflow, we start with aligned _featureCounts_ mapped at the gene-level and perform data pre-processing and exploratory analyses. Base **_R_** and the **_edgeR_** package are used to import, filter, and organize the raw counts data. We then finish off with data reduction visualizations and quality control checks. By doing  so, this allows for ease in performing downstream differential expression analysis and gene set testing. 
+  
+  This pipeline is inspired by _[Law et al. 2018](https://bioconductor.org/packages/release/workflows/vignettes/RNAseq123/inst/doc/limmaWorkflow.html)_ and Justin Colacino's '_Komen plexwell processing.R_' script (unpublished).
+  
+vignette: |
+  %\VignetteIndexEntry{Bulk RNA-Seq: Data Pre-processing for June 22 Plexwell}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+bibliography: references.bib
+link-citations: true
+nocite: '@*'
