@@ -10,3 +10,13 @@ navbar:
       href: mailto:<neilzhao@umich.edu>
     - icon: fa-github fa-lg
       href: https://github.com/nztao/KomenPlexwell_6-22-22
+output:
+  BiocStyle::html_document:
+    code_download: TRUE
+    code_folding: show
+    theme: cerulean  
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
