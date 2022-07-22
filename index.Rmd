@@ -1744,7 +1744,7 @@ To gauge whether our experimental design factors contribute meaningful expressio
 
 <br>
 
-```{r MDS, fig.cap="Multidimensional scaling plot (MDS) (**_left_**) and scree barplot (**_right_**) of log2-CPM values over default dimensions 1 and 2. Principle Coordinate Analysis was performed using the Euclidean distance metric for the average (_i.e. root-mean-square_) log2-fold changes of the top 500 genes divergent between pairs of samples.", fig.wide=TRUE, fig.show='asis', results='asis', echo=FALSE}
+```{r MDS, fig.cap="Multidimensional scaling plot (MDS) (**_left_**) and scree barplot (**_right_**) of log2-CPM values over default dimensions 1 and 2. Principle Coordinate Analysis was performed using the Euclidean distance metric for the average (_i.e. root-mean-square_) log2-fold changes of the top 500 genes divergent between pairs of samples.", fig.wide=TRUE, fig.show='asis', results='asis', echo=TRUE}
 glimmaMDS(split.DGElist[["komenredo.counts"]])
 ```
 
