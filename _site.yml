@@ -7,6 +7,7 @@ author:
 - name: Justin Colacino
   affiliation: *id
 package: BiocStyle
+output_dir: "."
 output:
   BiocStyle::html_document:
     code_download: TRUE
