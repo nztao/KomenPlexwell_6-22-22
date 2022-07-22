@@ -1,5 +1,5 @@
 name: "Komen-Plexwell-6-22"
-output_dir: "docs"
+output_dir: "."
 navbar:
   title: "Colacino Lab"
   left:
