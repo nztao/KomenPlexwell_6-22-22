@@ -1372,7 +1372,7 @@ anim_save("filtering_comparison.gif")
 ```
 :::
 
-```{r filteranimprocessed, echo=FALSE, autodep=TRUE}
+```{r filteranimprocessed, echo=FALSE, message=FALSE, warning=FALSE, autodep=TRUE}
 #Optional: Store the ggplot object frames to pass into gganimate
 # Warning: This takes awhile to render 
 
@@ -1672,7 +1672,7 @@ anim_save("TMM_norm_comparison.gif")
 ```
 :::
 
-```{r normboxvioanim, echo=FALSE, autodep=TRUE}
+```{r normboxvioanim, echo=FALSE, message=FALSE, warning=FALSE, autodep=TRUE}
 #Optional: Store the ggplot object frames to pass into gganimate
 # Warning: This takes awhile to render 
 
@@ -1769,7 +1769,7 @@ For more details, check out the [references] and [footnotes].
 
 For record-keeping and reproducibility purposes, this session information documents the versions of R and of the software/packages that were used in this pipeline.
 
-```{r sessionInfo, echo=FALSE}
+```{r sessionInfo, echo=FALSE, max.height='300px'}
 sessionInfo()
 ```
 
