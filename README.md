@@ -4,3 +4,5 @@
   This pipeline is inspired by _[Law et al. 2018](https://bioconductor.org/packages/release/workflows/vignettes/RNAseq123/inst/doc/limmaWorkflow.html)_ and Justin Colacino's '_Komen plexwell processing.R_' script (unpublished).
   
 ![](https://sph.umich.edu/news/2021posts/images/sph-building-exterior.jpg)
+
+_**[© 2022 Colacino lab](https://www.colacinolab.com/)**_
