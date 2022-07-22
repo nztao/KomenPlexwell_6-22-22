@@ -548,8 +548,9 @@ Essentially, we first place our desired pattern matches in a character vector us
                  all.metadata$Description)),
     
     #Rachel Morgan samples
+    #Note: You need to add regex symbol'^' for string starts with
     filter(all.metadata, 
-           grepl(paste(c("heart","brain", "cortex","5Y", "6_"), collapse = "|"), 
+           grepl(paste(c("heart","brain", "cortex","^5Y", "^6_"), collapse = "|"), 
                  all.metadata$Description)),
     
     #Katelyn Polemi samples
@@ -558,8 +559,9 @@ Essentially, we first place our desired pattern matches in a character vector us
                  all.metadata$Description)),
     
     #Linda Samuelson
+    #Note: You need to add regex symbol `$` for string ends with
     filter(all.metadata,
-           grepl(paste(c("V1","D1"), collapse = "|"), all.metadata$Description))
+           grepl(paste(c("V1$","D1$"), collapse = "|"), all.metadata$Description))
     
       )
   
