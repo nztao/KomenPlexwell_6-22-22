@@ -185,7 +185,7 @@ library(Glimma)
 
 # Data packaging
 
-The data for this pipeline comes from the June 22 Plexwell RNA-seqwell experiment. It includes the processed data (counts) for the [5-3-22 Komen experiment re-runs](https://drive.google.com/drive/folders/17I818qtjd8s5ROE4Umq-0YUCdVEkg6i8) and extra experimental sample wells for Rachel Morgan, Katelyn Polemi, Linda Samuelson.
+The data for this pipeline comes from the June 22 Plexwell RNA-seqwell experiment. It includes the processed data (counts) for the [5-3-22 Komen experiment re-runs](https://drive.google.com/drive/folders/17I818qtjd8s5ROE4Umq-0YUCdVEkg6i8) and extra experimental sample wells for Rachel Morgan, Katelyn Polemi, chirexp, Linda Samuelson.
 
 For reference, we re-processed the following samples for the Komen Plexwell Experiment on 5-3-2022:
 
@@ -384,13 +384,10 @@ The `all.metadata` file contains detailed information about our samples. We will
 metadata
 ```
 
-<input type=button class=hideshow>
-
 ```{r echo=FALSE}
 paged_table(all.metadata)
 ```
 
-</input>
 
 ## Formating the data
 
@@ -428,13 +425,10 @@ modified.counts <- seqdata %>%
 modified.counts
 ```
 
-<input type=button class=hideshow>
-
 ```{r echo=FALSE}
 paged_table(modified.counts)
 ```
 
-</input>
 
 ## Organizing sample information
 
@@ -450,7 +444,7 @@ Now that we've shortened the `seqdata` sample column names to contain only relev
 
 2.  Rachel Morgan's Experiment
 
--   organ (*i.e. heart, brain, cortex*)
+-   organ/anatomy (*i.e. heart, brain, cortex, midbrain, hippocampus*)
 -   phenotype (*i.e. sex, age, disease status/morbidity*)
 
 3.  Katelyn Polemi's Experiment
@@ -505,10 +499,11 @@ all(all.metadata$sample.id == colnames(modified.counts))
 
 Now that our counts and metadata files are formatted properly, we need to separate the sample counts based on experiment. To recap, we have counts datasets for four different RNA-seq experiments stored in the single `modified.counts` object:
 
-1.  **Komen re-runs for the 5-3-22 experiment**
-2.  **Rachel Morgan**
-3.  **Katelyn Polemi**
-4.  **Linda Samuelson**
+1.  **Komen re-runs for the 5-3-22 experiment** (_n = 123_)
+2.  **Rachel Morgan** (_n = 38_)
+3.  **Katelyn Polemi** (_n = 13_)
+4.  **chirexp** (_n = 12_)
+5.  **Linda Samuelson** (_n = 6_)
 
 We need to separate these experiments based on the following `all.metadata` patterns in the `Description` column:
 
@@ -519,15 +514,20 @@ We need to separate these experiments based on the following `all.metadata` patt
 2.  **Rachel Morgan**
 
 -   Starts with "*5Y \| 6\_*"
--   Contains "*heart \| brain \| cortex*"
+-   Contains "*Heart \| Brain \| Cortex \| Midbrain \| Hippoc*"
 
 3.  **Katelyn Polemi**
 
--   Contains "*MCF7 \| MCF10A*"
+-   Contains "*MCF10A_ML | MCF10A_MS | MCF10A_HG*"
+-   Starts with "*MCF7*"
 
-4.  **Linda Samuelson**
+4.  **chirexp**
 
--   Ends with "*V1 \| D1*"
+-   Contains "*MCF10A-DMSO 1 | MCF10A-DMSO 2 | MCF10A-DMSO 3 | MCF10A-CHIR*"
+
+5.  **Linda Samuelson**
+
+-   Ends with "*V1 \| D1 \| V2 \| D2 \| V3 \| D3*"
 
  
 
@@ -544,29 +544,36 @@ Essentially, we first place our desired pattern matches in a character vector us
     
     #Komen re-run samples
     filter(all.metadata, 
-           grepl(paste(c("7518","7889", "7953","8195", "8519", "8580"), collapse = "|"),
-                 all.metadata$Description)),
+           grepl(paste(c("7518","7889", "7953","8195", "8519", "8580"), 
+                       collapse = "|"), all.metadata$Description)),
     
     #Rachel Morgan samples
+    #Note: You need to add regex symbol'^' for string starts with
     filter(all.metadata, 
-           grepl(paste(c("heart","brain", "cortex","5Y", "6_"), collapse = "|"), 
-                 all.metadata$Description)),
+           grepl(paste(c("Heart", "Hippoc", "Brain","Cortex", "Midbrain", "^5Y", "^6_"), 
+                       collapse = "|"), all.metadata$Description)),
     
     #Katelyn Polemi samples
     filter(all.metadata,
-           grepl(paste(c("MCF7","MCF10A"), collapse = "|"), 
-                 all.metadata$Description)),
+           grepl(paste(c("MCF10A_ML", "MCF10A_MS", "MCF10A_HG", "^MCF7"), 
+                       collapse = "|"), all.metadata$Description)),
     
-    #Linda Samuelson
+    #chirexp samples
     filter(all.metadata,
-           grepl(paste(c("V1","D1"), collapse = "|"), all.metadata$Description))
-    
+           grepl(paste(c("MCF10A-DMSO 1", "MCF10A-DMSO 2", "MCF10A-DMSO 3", "MCF10A-CHIR"), 
+                       collapse = "|"), all.metadata$Description)),    
+    #Linda Samuelson
+    #Note: You need to add regex symbol `$` for string ends with 
+    filter(all.metadata,
+           grepl(paste(c("V1$", "D1$", "V2$", "D2$", "V3$", "D3$"), 
+                       collapse = "|"), all.metadata$Description))
       )
   
   #Be sure to name the metadata list entries in the proper order
   names(split.metadata.list) <- c("komenredo.metadata",
                                   "rachelm.metadata",
                                   "katelynp.metadata",
+                                  "chirexp.metadata",
                                   "lindas.metadata")
 ```
 
@@ -586,6 +593,28 @@ split.metadata.list
 
 </input>
 
+Perform a sanity to check to see that all `all.metadata$Description` entries were properly included in the data splits
+
+```{r eval=FALSE}
+#Number of entries per metadata split 
+sapply(split.metadata.list, nrow)
+
+#Make sure all entries were included from the raw metadata
+sum(sapply(split.metadata.list, nrow)) == nrow(all.metadata)
+```
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE, max.height='300px'}
+#Number of entries per metadata split 
+sapply(split.metadata.list, nrow)
+
+#Make sure all entries were included from the raw metadata
+sum(sapply(split.metadata.list, nrow)) == nrow(all.metadata)
+```
+
+</input>
+
  
 
 For an interactive paged table output, you will need to individually call on a specific list entry.[^1] For example, let's take a look at the paged table output of the Komen re-runs:
@@ -598,13 +627,10 @@ For an interactive paged table output, you will need to individually call on a s
 paged_table(split.metadata.list[[1]]) #list index for komen re-run experiment
 ```
 
-<input type=button class=hideshow>
-
 ```{r echo=FALSE}
 paged_table(split.metadata.list[[1]])
 ```
 
-</input>
 
 <br>
 
@@ -639,7 +665,11 @@ names(split.counts) <- gsub('.metadata', '.counts', names(split.counts))
 all(split.metadata.list$komenredo.metadata$sample.id == colnames(split.counts$komenredo.metadata))
 all(split.metadata.list$rachelm.metadata$sample.id == colnames(split.counts$rachelm.metadata))
 all(split.metadata.list$katelynp.metadata$sample.id == colnames(split.counts$katelynp.metadata))
+all(split.metadata.list$chirexp$sample.id == colnames(split.counts$chirexp))
 all(split.metadata.list$lindas.metadata$sample.id == colnames(split.counts$lindas.metadata))
+
+#Make sure all entries in metadata and counts splits match
+sum(sapply(split.metadata.list, nrow)) == sum(sapply(split.counts, ncol))
 ```
 
 <input type=button class=hideshow>
@@ -669,7 +699,23 @@ all(split.metadata.list$katelynp.metadata$sample.id == colnames(split.counts$kat
 <input type=button class=hideshow>
 
 ```{r echo=FALSE}
+all(split.metadata.list$chirexp$sample.id == colnames(split.counts$chirexp))
+```
+
+</input>
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
 all(split.metadata.list$lindas.metadata$sample.id == colnames(split.counts$lindas.metadata))
+```
+
+</input>
+
+<input type=button class=hideshow>
+
+```{r echo=FALSE}
+sum(sapply(split.metadata.list, nrow)) == sum(sapply(split.counts, ncol))
 ```
 
 </input>
@@ -822,13 +868,10 @@ Take a look at the modified `split.metadata.list[["komenredo.metadata"]]`:
 split.metadata.list[["komenredo.metadata"]]
 ```
 
-<input type=button class=hideshow>
-
 ```{r echo=FALSE}
 paged_table(split.metadata.list[["komenredo.metadata"]])
 ```
 
-</input>
 
 <br>
 
@@ -1031,13 +1074,10 @@ Let's take a look at our gene annotations.
 annot.gene.ids
 ```
 
-<input type=button class=hideshow>
-
 ```{r echo=FALSE}
  paged_table(annot.gene.ids)
 ```
 
-</input>
 
 <br>
 
@@ -1742,7 +1782,7 @@ To gauge whether our experimental design factors contribute meaningful expressio
 
 <br>
 
-```{r MDS, fig.cap="Multidimensional scaling plot (MDS) (**_left_**) and scree barplot (**_right_**) of log2-CPM values over default dimensions 1 and 2. Principle Coordinate Analysis was performed using the Euclidean distance metric for the average (_i.e. root-mean-square_) log2-fold changes of the top 500 genes divergent between pairs of samples.", fig.wide=TRUE, fig.show='asis', results='asis', echo=FALSE}
+```{r MDS, fig.cap="Multidimensional scaling plot (MDS) (**_left_**) and scree barplot (**_right_**) of log2-CPM values over default dimensions 1 and 2. Principle Coordinate Analysis was performed using the Euclidean distance metric for the average (_i.e. root-mean-square_) log2-fold changes of the top 500 genes divergent between pairs of samples.", fig.wide=TRUE, fig.show='asis', results='asis', echo=TRUE}
 glimmaMDS(split.DGElist[["komenredo.counts"]])
 ```
 
